@@ -1,18 +1,19 @@
 // ==========================================
 // File: RiserEngine.h
-// ライザーシンセコア (計画書フェーズ2準拠)
+// ライザーシンセコア (v0.2)
 //
-//  - 3オシレーター (MorphWavetable: Sine→Tri→Square→Saw→FM + カスタムWT)
-//    + ノイズ (White/Pink/Brown → 専用TPTバンドパスでピッチスイープ)
-//  - DAWトランスポート同期 (選択案A): ノートオンをトリガーに AudioPlayHead の
-//    PPQ を基準として指定Bar数 (1,2,4,8,16) で Progress 0.0→1.0 を進める。
-//    ホスト停止中は BPM ベースの内部クロックへ自動フォールバック。
-//  - トリガーはノート保持型: Progress完走後ホールド、ノートオフでリリース。
-//  - 9系統マルチENVカーブ (CurveStore) を32サンプル毎のコントロールティックで
-//    評価し、サンプル精度の一次平滑でジッパーノイズを排除。
-//  - SoAデータレイアウト (phase[osc][voice] 等の連続配列) のタイトループで
-//    自動ベクトル化を促す (SPECTRA8同様のスカラー設計)。
-//  - render() 内のメモリアロケーション/ロックは一切無し。
+//  - 3オシレーター: WAVE選択 (ビルトイン Sine/Tri/Square/Saw/FM または
+//    OSC毎のカスタムWavetable + POSITIONノブ)
+//  - ピッチは StartKey→EndKey の絶対指定。MIDIノートはトリガー専用で、
+//    Pitch ENVカーブ (下=StartKey / 上=EndKey) がピッチを決定する。
+//  - ソース毎 (OSC1-3/Noise) の SOLO/MUTE
+//  - モジュレーションENV: Level/Detune/Spread/(Noise Res) を
+//    バイポーラ加算式 (中央=ノブ値, ±レンジ半分) で変調
+//  - フィルター4系統 (ZDF/TPT) × ソース別ルーティング:
+//    各フィルターにつき OSC1-3/Noise を個別に通す/バイパスできるため、
+//    フィルター状態は [フィルター4][ソース4] の16基を保持
+//  - DAWトランスポート同期 (PPQ絶対時間, Bar数 1-16) / ノート保持型トリガー
+//  - render() 内のメモリアロケーション/ロックは一切無し
 // ==========================================
 #pragma once
 
@@ -29,41 +30,52 @@ class RiserEngine
 {
 public:
     static constexpr int kNumOscs = 3;
+    static constexpr int kNumSources = 4;   // OSC1-3 + Noise
     static constexpr int kMaxUnison = 7;
     static constexpr int kNumFilters = 4;
-    static constexpr int kCtrlInterval = 32; // コントロールレート (サンプル)
+    static constexpr int kCtrlInterval = 32;
+
+    // WAVEコンボの並び (0-4=ビルトイン, 5=カスタムWT)
+    enum WaveMode { Sine = 0, Triangle, Square, Saw, FM, CustomWT };
 
     // ---- ブロック毎にプロセッサーが収集して渡すパラメーター (POD) ----
     struct Params
     {
-        float lift = 1.0f;           // マスターLIFTノブ (全カーブ強度)
+        float lift = 1.0f;
 
         struct Osc
         {
             bool  on = false;
-            float wave = 0.75f;      // 0..1 モーフ位置
+            bool  solo = false;
+            bool  mute = false;
+            int   waveMode = Saw;    // WaveMode
+            float pos = 0.0f;        // WTポジション (CustomWT時のみ有効)
             float level = 0.8f;
-            float coarse = 0.0f;     // 半音
-            int   unison = 1;        // 1..7
+            float coarse = 0.0f;     // 半音 (Start/EndKeyへのオフセット)
+            int   unison = 1;
             float detune = 12.0f;    // cents
-            float spread = 0.7f;     // 0..1
-            float range = 24.0f;     // ピッチカーブ ±半音レンジ
+            float spread = 0.7f;
+            int   keyStart = 36;     // C2
+            int   keyEnd = 84;       // C6
         };
         std::array<Osc, kNumOscs> osc;
 
-        int   noiseType = 0;         // 0=White 1=Pink 2=Brown
+        bool  noiseSolo = false;
+        bool  noiseMute = false;
+        int   noiseType = 0;
         float noiseLevel = 0.0f;
-        float noisePitch = 500.0f;   // BP中心周波数の基準 (Hz)
+        float noisePitch = 500.0f;
         float noiseRes = 2.0f;
-        float noiseRangeOct = 5.0f;  // ノイズピッチカーブ ±オクターブレンジ
+        float noiseRangeOct = 5.0f;
 
         struct Flt
         {
             bool  on = false;
-            int   type = 0;          // TptSvf::Type
+            int   type = 0;
             float cutoff = 1000.0f;
             float res = 0.9f;
-            float env = 0.0f;        // -1..+1 (カーブ適用量, ±5oct)
+            float env = 0.0f;                     // -1..+1 (±5oct)
+            std::array<bool, kNumSources> route { true, true, true, true }; // ソース別ルーティング
         };
         std::array<Flt, kNumFilters> flt;
 
@@ -73,16 +85,21 @@ public:
 
     RiserEngine() = default;
 
-    void setWavetable(const MorphWavetable* wt) noexcept { wavetable = wt; }
+    void setWavetable(int osc, const MorphWavetable* wt) noexcept
+    {
+        if (osc >= 0 && osc < kNumOscs)
+            wavetables[(size_t)osc] = wt;
+    }
 
-    // ---- prepareToPlay: 事前アロケーション/係数計算のみ ----
     void prepare(double sampleRate) noexcept
     {
         sr = sampleRate;
-        for (auto& f : filters) f.prepare(sampleRate);
+        for (auto& row : filters)
+            for (auto& f : row)
+                f.prepare(sampleRate);
         noiseFilter.prepare(sampleRate);
         noiseFilter.setType(TptSvf::BandPass);
-        pitchCoef = 1.0f - std::exp(-1.0f / (0.004f * (float)sr)); // τ≒4ms
+        smCoef = 1.0f - std::exp(-1.0f / (0.004f * (float)sr)); // τ≒4ms
         hardReset();
     }
 
@@ -95,17 +112,22 @@ public:
         progInc = 0.0;
         hostSync = false;
         ctrlCount = 0;
-        fxEnvSm = 0.0f;
+        snapNext = true;
         for (auto& po : phase) po.fill(0.0f);
-        for (auto& ps : pitchSm) ps = 0.0f;
-        for (auto& f : filters) f.reset();
+        pitchSm.fill(60.0f);
+        levelSm.fill(0.0f);
+        pitchTarget.fill(60.0f);
+        levelTarget.fill(0.0f);
+        for (auto& row : filters)
+            for (auto& f : row)
+                f.reset();
         noiseFilter.reset();
         pinkB.fill(0.0f);
         brownState = 0.0f;
         uiProgress.store(0.0f, std::memory_order_relaxed);
     }
 
-    // ---- MIDI (processBlock 冒頭で呼ばれる) ----
+    // ---- MIDI ----
     void noteOn(int note, float velocity, double ppqNow, bool hostPlaying) noexcept
     {
         curNote = note;
@@ -114,7 +136,8 @@ public:
         startPpq = ppqNow;
         progress = 0.0;
         velGain = 0.25f + 0.75f * juce::jlimit(0.0f, 1.0f, velocity);
-        // ユニゾン位相を軽くばらしてコムを回避 (決定的・アロケ無し)
+        ctrlCount = 0;      // 次サンプルで即コントロールティック
+        snapNext = true;    // 平滑をターゲットへスナップ (古い値からのグライド防止)
         for (int o = 0; o < kNumOscs; ++o)
             for (int v = 0; v < kMaxUnison; ++v)
                 phase[(size_t)o][(size_t)v] = std::fmod(0.137f * (float)(v + 1) * (float)(o + 1), 1.0f);
@@ -128,42 +151,34 @@ public:
 
     void allNotesOff() noexcept { noteHeld = false; }
 
-    // ---- トランスポート同期 (ブロック毎・render前に呼ぶ) ----
-    //  bars: 1,2,4,8,16 / qnPerBar: 拍子から求めた1小節の4分音符数
+    // ---- トランスポート同期 (ブロック毎・render前) ----
     void syncTransport(bool playing, bool hasPpq, double ppq,
                        double bpm, double qnPerBar, int bars) noexcept
     {
         const double safeBpm = (bpm > 20.0 && bpm < 999.0) ? bpm : 120.0;
         totalQn = juce::jmax(0.25, (double)bars * qnPerBar);
-        progInc = (safeBpm / 60.0) / (sr * totalQn); // 1サンプルあたりのProgress
+        progInc = (safeBpm / 60.0) / (sr * totalQn);
 
         if (noteHeld && hostSync)
         {
             if (playing && hasPpq)
-            {
-                // PPQ絶対時間からProgressを再同期 (ドリフト無し・ループ/ジャンプ耐性)
                 progress = juce::jlimit(0.0, 1.0, (ppq - startPpq) / totalQn);
-            }
             else
-            {
-                hostSync = false; // 再生停止 → 内部クロックで続行
-            }
+                hostSync = false;
         }
     }
 
     bool isNoteActive() const noexcept { return noteHeld || ampEnv > 1.0e-4f; }
-    float getFxEnvValue() const noexcept { return fxEnvSm; }
+    float getProgressF() const noexcept { return (float)progress; }
 
-    // GUI用 (VBlankアニメーション)
     std::atomic<float> uiProgress { 0.0f };
 
-    // ---- レンダリング (加算ミックス。L/R は事前クリア済みバッファ) ----
+    // ---- レンダリング (L/R は加算ミックス) ----
     void render(float* outL, float* outR, int numSamples, const Params& p,
                 const CurveStore& curves) noexcept
     {
-        if (wavetable == nullptr || numSamples <= 0) return;
+        if (numSamples <= 0) return;
 
-        // 無音時は完全スキップ (リリース完了後にProgressをリセット)
         if (!noteHeld && ampEnv <= 1.0e-4f)
         {
             if (progress > 0.0) { progress = 0.0; uiProgress.store(0.0f, std::memory_order_relaxed); }
@@ -171,19 +186,25 @@ public:
             return;
         }
 
+        // SOLO判定 (いずれかのソースがSOLOなら、SOLO以外は無効)
+        bool anySolo = p.noiseSolo;
+        for (const auto& o : p.osc) anySolo = anySolo || o.solo;
+        std::array<bool, kNumSources> active {};
+        for (int o = 0; o < kNumOscs; ++o)
+            active[(size_t)o] = p.osc[(size_t)o].on && !p.osc[(size_t)o].mute
+                                && (!anySolo || p.osc[(size_t)o].solo);
+        active[3] = p.noiseLevel > 0.0001f && !p.noiseMute && (!anySolo || p.noiseSolo);
+
         const float attCoef = 1.0f - std::exp(-1.0f / (juce::jmax(0.1f, p.attackMs) * 0.001f * (float)sr));
         const float relCoef = 1.0f - std::exp(-1.0f / (juce::jmax(1.0f, p.releaseMs) * 0.001f * (float)sr));
-        const float baseHz = 440.0f * std::exp2(((float)curNote - 69.0f) / 12.0f);
         const float invSr = 1.0f / (float)sr;
 
         for (int i = 0; i < numSamples; ++i)
         {
-            // ---- コントロールティック (32サンプル毎) ----
             if (ctrlCount == 0)
                 controlTick(p, curves);
             ctrlCount = (ctrlCount + 1) % kCtrlInterval;
 
-            // ---- Progress 前進 (ホールド型: 1.0で停止) ----
             if (noteHeld && progress < 1.0)
             {
                 progress += progInc;
@@ -192,54 +213,71 @@ public:
 
             float l = 0.0f, r = 0.0f;
 
-            // ---- オシレーター (SoA: phase[osc][voice] 連続アクセス) ----
+            // ---- OSC1-3 (各ソース独立にフィルタールーティング) ----
             for (int o = 0; o < kNumOscs; ++o)
             {
+                if (!active[(size_t)o]) continue;
+                const MorphWavetable* wt = wavetables[(size_t)o];
+                if (wt == nullptr) continue;
+
                 const auto& po = p.osc[(size_t)o];
-                if (!po.on || po.level <= 0.0001f) continue;
 
-                // サンプル精度のピッチ平滑 (ジッパーノイズ対策)
-                pitchSm[(size_t)o] += pitchCoef * (pitchTarget[(size_t)o] - pitchSm[(size_t)o]);
+                pitchSm[(size_t)o] += smCoef * (pitchTarget[(size_t)o] - pitchSm[(size_t)o]);
+                levelSm[(size_t)o] += smCoef * (levelTarget[(size_t)o] - levelSm[(size_t)o]);
+                if (levelSm[(size_t)o] <= 0.0002f && levelTarget[(size_t)o] <= 0.0001f) continue;
 
-                const float freq = baseHz * std::exp2((po.coarse + pitchSm[(size_t)o]) / 12.0f);
+                const float freq = 440.0f * std::exp2((pitchSm[(size_t)o] - 69.0f) / 12.0f);
                 const float inc0 = freq * invSr;
                 const int uni = juce::jlimit(1, kMaxUnison, po.unison);
-                const float norm = po.level / std::sqrt((float)uni);
+                const float norm = levelSm[(size_t)o] / std::sqrt((float)uni);
+
+                const bool useCustom = (po.waveMode == CustomWT);
+                const float morph = useCustom ? po.pos : (float)po.waveMode * 0.25f;
 
                 float* ph = phase[(size_t)o].data();
                 const float* cf = centsFac[(size_t)o].data();
                 const float* gl = gainL[(size_t)o].data();
                 const float* gr = gainR[(size_t)o].data();
 
+                float lo = 0.0f, ro = 0.0f;
                 for (int v = 0; v < uni; ++v)
                 {
                     float inc = inc0 * cf[v];
-                    if (inc > 0.45f) inc = 0.45f; // 超高域の暴走防止
+                    if (inc > 0.45f) inc = 0.45f;
                     float pv = ph[v] + inc;
                     if (pv >= 1.0f) pv -= 1.0f;
                     ph[v] = pv;
-                    const float s = wavetable->sample(pv, po.wave, inc) * norm;
-                    l += s * gl[v];
-                    r += s * gr[v];
+                    const float s = wt->sample(pv, morph, inc, useCustom) * norm;
+                    lo += s * gl[v];
+                    ro += s * gr[v];
                 }
+
+                // ソース別フィルターチェーン
+                for (int j = 0; j < kNumFilters; ++j)
+                    if (p.flt[(size_t)j].on && p.flt[(size_t)j].route[(size_t)o])
+                        filters[(size_t)j][(size_t)o].processStereo(lo, ro);
+
+                l += lo;
+                r += ro;
             }
 
-            // ---- ノイズ (BPフィルターでピッチスイープ) ----
-            if (p.noiseLevel > 0.0001f)
+            // ---- ノイズ (ソース3) ----
+            if (active[3])
             {
-                const float nz = nextNoise(p.noiseType) * p.noiseLevel;
+                levelSm[3] += smCoef * (levelTarget[3] - levelSm[3]);
+                const float nz = nextNoise(p.noiseType) * levelSm[3];
                 float nl = nz, nr = nz;
                 noiseFilter.processStereo(nl, nr);
+
+                for (int j = 0; j < kNumFilters; ++j)
+                    if (p.flt[(size_t)j].on && p.flt[(size_t)j].route[3])
+                        filters[(size_t)j][3].processStereo(nl, nr);
+
                 l += nl;
                 r += nr;
             }
 
-            // ---- 4系統 ZDF/TPT フィルター (直列) ----
-            for (int j = 0; j < kNumFilters; ++j)
-                if (p.flt[(size_t)j].on)
-                    filters[(size_t)j].processStereo(l, r);
-
-            // ---- アンプエンベロープ (ノート保持型) ----
+            // ---- アンプエンベロープ ----
             const float target = noteHeld ? 1.0f : 0.0f;
             ampEnv += (noteHeld ? attCoef : relCoef) * (target - ampEnv);
 
@@ -252,67 +290,102 @@ public:
     }
 
 private:
-    // ---- コントロールティック: カーブ評価とターゲット更新 ----
+    // ---- コントロールティック: 全カーブ評価とターゲット更新 ----
     void controlTick(const Params& p, const CurveStore& curves) noexcept
     {
         const float prog = (float)progress;
         const float lift = juce::jlimit(0.0f, 1.0f, p.lift);
 
-        auto bipolar = [lift](float y) noexcept { return (0.5f + (y - 0.5f) * lift - 0.5f) * 2.0f; }; // -1..1
+        // バイポーラ偏差 (-1..1, LIFTで縮小)
+        auto bip = [lift, &curves, prog](int idx) noexcept
+        {
+            const float y = curves.read(idx).evaluate(prog);
+            return (y - 0.5f) * 2.0f * lift;
+        };
+        // ユニポーラ (0..1, LIFT=0で0.5へ収束)
+        auto uni = [lift, &curves, prog](int idx) noexcept
+        {
+            const float y = curves.read(idx).evaluate(prog);
+            return 0.5f + (y - 0.5f) * lift;
+        };
 
-        // ピッチカーブ (Osc1-3)
         for (int o = 0; o < kNumOscs; ++o)
         {
-            const float y = curves.read(CurveStore::PitchOsc1 + o).evaluate(prog);
-            pitchTarget[(size_t)o] = bipolar(y) * p.osc[(size_t)o].range;
+            const auto& po = p.osc[(size_t)o];
 
-            // ユニゾンのデチューン係数とパンゲイン (等パワー)
-            const int uni = juce::jlimit(1, kMaxUnison, p.osc[(size_t)o].unison);
+            // PITCH: StartKey→EndKey のユニポーラ補間 (+COARSE)
+            const float ky = uni(CurveStore::oscCurve(o, 0));
+            pitchTarget[(size_t)o] = (float)po.keyStart
+                                   + ((float)po.keyEnd - (float)po.keyStart) * ky
+                                   + po.coarse;
+
+            // LEVEL: バイポーラ加算 (±0.5)
+            levelTarget[(size_t)o] = juce::jlimit(0.0f, 1.0f,
+                po.level + bip(CurveStore::oscCurve(o, 1)) * 0.5f);
+
+            // DETUNE: ±50ct / SPREAD: ±0.5 (ユニゾンテーブル再計算)
+            const float detEff = juce::jlimit(0.0f, 100.0f,
+                po.detune + bip(CurveStore::oscCurve(o, 2)) * 50.0f);
+            const float sprEff = juce::jlimit(0.0f, 1.0f,
+                po.spread + bip(CurveStore::oscCurve(o, 3)) * 0.5f);
+
+            const int uniN = juce::jlimit(1, kMaxUnison, po.unison);
             for (int v = 0; v < kMaxUnison; ++v)
             {
-                const float off = (uni <= 1) ? 0.0f : (2.0f * (float)v / (float)(uni - 1) - 1.0f);
-                centsFac[(size_t)o][(size_t)v] = std::exp2(off * p.osc[(size_t)o].detune / 1200.0f);
-                const float pan = 0.5f + off * 0.5f * p.osc[(size_t)o].spread;
+                const float off = (uniN <= 1) ? 0.0f : (2.0f * (float)v / (float)(uniN - 1) - 1.0f);
+                centsFac[(size_t)o][(size_t)v] = std::exp2(off * detEff / 1200.0f);
+                const float pan = 0.5f + off * 0.5f * sprEff;
                 const float th = pan * juce::MathConstants<float>::halfPi;
                 gainL[(size_t)o][(size_t)v] = std::cos(th);
                 gainR[(size_t)o][(size_t)v] = std::sin(th);
             }
         }
 
-        // ノイズピッチカーブ → BP中心周波数
+        // ノイズ: PITCH (バイポーラoct) / LEVEL / RES
         {
-            const float y = curves.read(CurveStore::PitchNoise).evaluate(prog);
-            const float target = p.noisePitch * std::exp2(bipolar(y) * p.noiseRangeOct);
+            const float target = p.noisePitch
+                * std::exp2(bip(CurveStore::NoisePitch) * p.noiseRangeOct);
             noiseCutSm += 0.5f * (target - noiseCutSm);
-            noiseFilter.setCoef(noiseCutSm, p.noiseRes);
+
+            levelTarget[3] = juce::jlimit(0.0f, 1.0f,
+                p.noiseLevel + bip(CurveStore::NoiseLevel) * 0.5f);
+
+            const float resEff = juce::jlimit(0.5f, 12.0f,
+                p.noiseRes + bip(CurveStore::NoiseRes) * 5.75f);
+            noiseFilter.setCoef(noiseCutSm, resEff);
         }
 
-        // フィルターカーブ → カットオフ (±5オクターブ)
+        // フィルター: バイポーラ ±5oct × ENV AMT
         for (int j = 0; j < kNumFilters; ++j)
         {
             if (!p.flt[(size_t)j].on) continue;
-            const float y = curves.read(CurveStore::Filter1 + j).evaluate(prog);
             const float target = p.flt[(size_t)j].cutoff
-                               * std::exp2(p.flt[(size_t)j].env * bipolar(y) * 5.0f);
+                * std::exp2(p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j) * 5.0f);
             cutSm[(size_t)j] += 0.5f * (target - cutSm[(size_t)j]);
-            filters[(size_t)j].setType(p.flt[(size_t)j].type);
-            filters[(size_t)j].setCoef(cutSm[(size_t)j], p.flt[(size_t)j].res);
+
+            for (int s = 0; s < kNumSources; ++s)
+            {
+                filters[(size_t)j][(size_t)s].setType(p.flt[(size_t)j].type);
+                filters[(size_t)j][(size_t)s].setCoef(cutSm[(size_t)j], p.flt[(size_t)j].res);
+            }
         }
 
-        // FXカーブ (ユニポーラ 0..1)
+        // ノートオン直後は平滑をスナップ (古い値からのグライド防止)
+        if (snapNext)
         {
-            const float y = curves.read(CurveStore::FxCurve).evaluate(prog) * lift;
-            fxEnvSm += 0.3f * (y - fxEnvSm);
+            snapNext = false;
+            pitchSm = pitchTarget;
+            levelSm = levelTarget;
         }
     }
 
-    // ---- ノイズジェネレーター (xorshift + Kellett Pink + 漏れ積分Brown) ----
+    // ---- ノイズジェネレーター ----
     inline float nextNoise(int type) noexcept
     {
         rngState ^= rngState << 13;
         rngState ^= rngState >> 17;
         rngState ^= rngState << 5;
-        const float w = ((float)(rngState & 0xffffff) / 8388608.0f) - 1.0f; // -1..1
+        const float w = ((float)(rngState & 0xffffff) / 8388608.0f) - 1.0f;
 
         switch (type)
         {
@@ -329,7 +402,7 @@ private:
             pinkB[6] = w * 0.115926f;
             return pink * 0.11f;
         }
-        case 2: // Brown (漏れ積分)
+        case 2: // Brown
             brownState = 0.995f * brownState + w * 0.05f;
             return brownState * 3.0f;
         default: // White
@@ -338,11 +411,12 @@ private:
     }
 
     // ---- 状態 ----
-    const MorphWavetable* wavetable = nullptr;
+    std::array<const MorphWavetable*, kNumOscs> wavetables { nullptr, nullptr, nullptr };
     double sr = 44100.0;
 
     bool noteHeld = false;
     bool hostSync = false;
+    bool snapNext = true;
     int curNote = -1;
     float velGain = 1.0f;
     double startPpq = 0.0;
@@ -361,15 +435,16 @@ private:
 
     std::array<float, kNumOscs> pitchTarget {};
     std::array<float, kNumOscs> pitchSm {};
-    float pitchCoef = 0.01f;
+    std::array<float, kNumSources> levelTarget {};
+    std::array<float, kNumSources> levelSm {};
+    float smCoef = 0.01f;
 
-    std::array<TptSvf, kNumFilters> filters;
+    // [フィルター][ソース] = 16基 (ソース別ルーティング用)
+    std::array<std::array<TptSvf, kNumSources>, kNumFilters> filters;
     std::array<float, kNumFilters> cutSm { 1000.0f, 1000.0f, 1000.0f, 1000.0f };
 
     TptSvf noiseFilter;
     float noiseCutSm = 500.0f;
-
-    float fxEnvSm = 0.0f;
 
     juce::uint32 rngState = 0x9e3779b9;
     std::array<float, 7> pinkB {};

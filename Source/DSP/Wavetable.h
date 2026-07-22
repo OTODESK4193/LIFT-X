@@ -151,14 +151,18 @@ public:
     bool hasCustom() const noexcept { return mCustom.load(std::memory_order_relaxed) != nullptr; }
 
     // GUI波形表示用: morphPos位置の波形を n 点へ縮小して書き出す (メッセージスレッド用)
-    void getDisplayWave(float morphPos, float* out, int n) const
+    //  allowCustom=false でビルトイン波形を強制 (LIFT-X: WAVEコンボがビルトイン選択時)
+    void getDisplayWave(float morphPos, float* out, int n, bool allowCustom = true) const
     {
         for (int i = 0; i < n; ++i)
-            out[i] = sample((float)i / (float)n, morphPos, 1.0f / 512.0f);
+            out[i] = sample((float)i / (float)n, morphPos, 1.0f / 512.0f, allowCustom);
     }
 
     // phase: 0..1, morphPos: 0..1, phaseIncPerSample: f0/sampleRate
-    float sample(float phase, float morphPos, float phaseIncPerSample) const noexcept
+    //  allowCustom=true かつカスタムWTロード済みならカスタムを使用。
+    //  false ならビルトイン (Sine→Tri→Square→Saw→FM) を強制。
+    float sample(float phase, float morphPos, float phaseIncPerSample,
+                 bool allowCustom = true) const noexcept
     {
         // ミップ選択: 再生周波数で許容される最大倍音数から決定
         const float maxHarmF = 0.5f / juce::jmax(1.0e-6f, phaseIncPerSample); // sr/(2*f0)
@@ -171,7 +175,7 @@ public:
         const float frac = idx - (float)i0;
 
         // カスタムテーブルが有効ならそちらを使用 (ロックフリー)
-        if (const CustomSet* cs = mCustom.load(std::memory_order_relaxed))
+        if (const CustomSet* cs = allowCustom ? mCustom.load(std::memory_order_relaxed) : nullptr)
         {
             const float fpos = juce::jlimit(0.0f, 1.0f, morphPos) * (float)(cs->numFrames - 1);
             const int f0i = juce::jlimit(0, cs->numFrames - 1, (int)fpos);

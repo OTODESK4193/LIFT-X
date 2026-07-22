@@ -27,7 +27,7 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     typeBox.addItemList({ "LowPass", "HighPass", "BandPass", "Notch" }, 1);
     addAndMakeVisible(typeBox);
     typeLabel.setText("TYPE", juce::dontSendNotification);
-    typeLabel.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
+    typeLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
     typeLabel.setColour(juce::Label::textColourId, LiftColors::textDim);
     typeLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(typeLabel);
@@ -40,7 +40,7 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
         addAndMakeVisible(k);
 
         l.setText(text, juce::dontSendNotification);
-        l.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
+        l.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
         l.setColour(juce::Label::textColourId, LiftColors::textDim);
         l.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(l);
@@ -49,7 +49,20 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     setupKnob(resKnob, resLabel, "RES");
     setupKnob(envKnob, envLabel, "ENV AMT");
 
-    hint.setFont(juce::Font(juce::FontOptions(10.5f)));
+    // ソース別ルーティングボタン (点灯=通す / 消灯=バイパス)
+    static const char* srcBtnNames[4] = { "OSC 1", "OSC 2", "OSC 3", "NOISE" };
+    for (int s = 0; s < 4; ++s)
+    {
+        routeToggles[(size_t)s] = std::make_unique<GlowToggle>(srcBtnNames[s],
+            s < 3 ? LiftColors::accentOsc : LiftColors::lilac);
+        addAndMakeVisible(*routeToggles[(size_t)s]);
+    }
+    routeLabel.setText("ROUTE:", juce::dontSendNotification);
+    routeLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+    routeLabel.setColour(juce::Label::textColourId, LiftColors::textDim);
+    addAndMakeVisible(routeLabel);
+
+    hint.setFont(juce::Font(juce::FontOptions(12.0f)));
     hint.setColour(juce::Label::textColourId, LiftColors::textDim);
     hint.setJustificationType(juce::Justification::centredLeft);
     hint.setText(juce::CharPointer_UTF8(
@@ -89,6 +102,14 @@ void FilterPanel::setSub(int idx)
         proc.apvts, "flt" + n + "Res", resKnob);
     envAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         proc.apvts, "flt" + n + "Env", envKnob);
+
+    static const char* srcIds[4] = { "Osc1", "Osc2", "Osc3", "Noise" };
+    for (int s = 0; s < 4; ++s)
+    {
+        routeAtts[(size_t)s].reset();
+        routeAtts[(size_t)s] = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            proc.apvts, "flt" + n + "Route" + srcIds[s], *routeToggles[(size_t)s]);
+    }
 
     for (int i = 0; i < 4; ++i)
         styleTabButton(*subTabs[(size_t)i], i == activeSub);
@@ -139,7 +160,18 @@ void FilterPanel::resized()
     knobCell(resLabel, resKnob);
     knobCell(envLabel, envKnob);
 
-    r.removeFromTop(8);
+    r.removeFromTop(6);
+
+    // ルーティング行 (点灯=このフィルターを通る)
+    auto routeRow = r.removeFromTop(24);
+    routeLabel.setBounds(routeRow.removeFromLeft(64));
+    for (int s = 0; s < 4; ++s)
+    {
+        routeToggles[(size_t)s]->setBounds(routeRow.removeFromLeft(86));
+        routeRow.removeFromLeft(6);
+    }
+
+    r.removeFromTop(6);
     hint.setBounds(r.removeFromBottom(18));
     r.removeFromBottom(4);
     editor.setBounds(r);

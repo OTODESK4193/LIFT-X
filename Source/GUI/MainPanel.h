@@ -1,6 +1,9 @@
 // ==========================================
 // File: MainPanel.h
-// MAINタブ: LIFTノブ / Bars / オシレーター3基 / ノイズ / カスタムWT / Progress表示
+// MAINタブ (v0.2):
+//  LIFT/Bars/Attack/Release/Master/Progress +
+//  OSC1-3 (On/Solo/Mute, WAVEコンボ, 波形表示, BROWSE/RND, POS等6ノブ,
+//          StartKey/EndKey MIDIラーン) + NOISE列 + Wavetableブラウザ
 // ==========================================
 #pragma once
 
@@ -13,9 +16,12 @@
 #include "../PluginProcessor.h"
 #include "ValueKnob.h"
 #include "GlowToggle.h"
+#include "WaveDisplay.h"
+#include "WavetableBrowser.h"
 #include "ColorPalette.h"
 
-class MainPanel : public juce::Component
+class MainPanel : public juce::Component,
+                  private juce::Timer
 {
 public:
     explicit MainPanel(LiftXAudioProcessor& p);
@@ -55,7 +61,7 @@ private:
             }
 
             g.setColour(LiftColors::text);
-            g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+            g.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
             g.drawText("PROGRESS " + juce::String((int)std::round(v * 100.0f)) + "%",
                        getLocalBounds(), juce::Justification::centred);
         }
@@ -63,7 +69,7 @@ private:
     private:
         LiftXAudioProcessor& proc;
         float last = -1.0f;
-        juce::VBlankAttachment vblank; // デストラクタで自動解除
+        juce::VBlankAttachment vblank;
     };
 
     struct KnobCell
@@ -72,35 +78,50 @@ private:
         juce::Label label;
     };
 
+    void timerCallback() override;
     void setupKnob(KnobCell& c, const juce::String& text, const juce::String& paramId,
                    juce::Colour accent);
-    void setupCombo(juce::ComboBox& box, juce::Label& label, const juce::String& text,
-                    const juce::String& paramId, const juce::StringArray& items);
+    void setupCombo(juce::ComboBox& box, const juce::String& paramId,
+                    const juce::StringArray& items);
     void layoutKnobGrid(juce::Rectangle<int> area, KnobCell** cells, int count, int cols);
-    void updateWtLabel();
+    void refreshWaveDisplay(int osc);
+    void refreshKeyButtons();
+    void armLearn(const juce::String& paramId, juce::TextButton& btn);
 
     LiftXAudioProcessor& proc;
 
-    // ---- LIFT / グローバル ----
+    // ---- グローバル ----
     KnobCell liftCell, attackCell, releaseCell, masterCell;
     juce::ComboBox barsBox;
     juce::Label barsLabel;
     ProgressStrip progressStrip;
 
     // ---- オシレーター 1-3 ----
-    std::array<std::unique_ptr<GlowToggle>, 3> oscOn;
-    std::array<KnobCell, 3> oscWave, oscLevel, oscCoarse, oscUni, oscDet, oscSpread;
+    std::array<std::unique_ptr<GlowToggle>, 3> oscOn, oscSolo, oscMute;
+    std::array<juce::ComboBox, 3> waveBox;
+    std::array<WaveDisplay, 3> waveDisp;
+    std::array<juce::TextButton, 3> browseBtn, rndBtn;
+    std::array<KnobCell, 3> oscPos, oscLevel, oscCoarse, oscUni, oscDet, oscSpread;
+    std::array<juce::TextButton, 3> keyStartBtn, keyEndBtn;
+
+    // 波形表示の更新検知用
+    std::array<int, 3> lastWaveMode { -1, -1, -1 };
+    std::array<float, 3> lastPos { -1.0f, -1.0f, -1.0f };
+    std::array<juce::String, 3> lastWtPath;
 
     // ---- ノイズ ----
+    std::unique_ptr<GlowToggle> noiseSolo, noiseMute;
+    juce::Label noiseTitle;
     juce::ComboBox noiseTypeBox;
-    juce::Label noiseTypeLabel;
-    KnobCell noiseLevel, noisePitch, noiseRes;
+    KnobCell noiseLevel, noisePitch, noiseRes, noiseRange;
 
-    // ---- カスタムWavetable ----
-    juce::TextButton loadWtButton { "LOAD WT" };
-    juce::TextButton clearWtButton { "CLEAR WT" };
-    juce::Label wtLabel;
-    std::unique_ptr<juce::FileChooser> fileChooser;
+    // ---- MIDIラーン ----
+    juce::String armedParamId;          // 空=非武装
+    juce::TextButton* armedButton = nullptr;
+    int lastNoteEvents = 0;
+
+    // ---- Wavetableブラウザ (オーバーレイ) ----
+    WavetableBrowser browser;
 
     // ---- アタッチメント ----
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliderAtts;

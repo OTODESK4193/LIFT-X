@@ -46,6 +46,11 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutoffAtt, resAtt, envAtt;
 
+    // ソース別ルーティング (点灯=このフィルターを通る / 消灯=バイパス)
+    std::array<std::unique_ptr<GlowToggle>, 4> routeToggles;
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 4> routeAtts;
+    juce::Label routeLabel;
+
     juce::Label hint;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FilterPanel)

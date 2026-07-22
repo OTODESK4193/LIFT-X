@@ -1,22 +1,22 @@
 // ==========================================
 // File: FxChain.h
-// 6スロット直列FXチェーン (Granular の FxChain を移植・拡張)
+// 5スロット直列FXチェーン (Granular の FxChain を移植・拡張 / v0.2)
 //
-// FX6種:
+// FX5種 (スロットは適用順序の並び替え用):
 //  - ADAA Saturation : アンチエイリアス歪み (アルゴリズム10種)
 //  - Ensemble Chorus : 4ボイス
 //  - Tape Delay      : テンポ同期・入力ダッキング付き
-//  - Freeze          : スペクトル的な止め
 //  - Shimmer Reverb  : 16ch FDN + オクターブシフター
-//  - Beat Ducking    : テンポ同期ポンプ (独立スロット・PPQ同期) ← LIFT-X追加
+//  - Beat Ducking    : テンポ同期ポンプ (PPQ同期, 1Bar〜1/64 付点/三連対応)
 //
-// LIFT-X での変更点:
-//  - Chorus/Delay/Freeze の固定長 std::array を prepareToPlay での
-//    事前確保 std::vector に変更し、SR 44.1-192kHz で必要長を保証
-//    (processBlock 内でのアロケーションは従来通り一切無し)
-//  - OctaveShifter のウィンドウ長をSR依存化
-//  - FXカーブ (マルチENV) によるスロットWet量変調はプロセッサー側で
-//    Params::amount に合成してから渡す
+// LIFT-X v0.2 での変更点:
+//  - Freeze を削除、スロット数 5 (SPECTRA8と同じ「順序を選ぶ」方式)
+//  - AMT等のパラメーターはFX毎に保持し、マルチENVカーブによる
+//    バイポーラ加算変調をプロセッサー側で合成してから渡す
+//  - Delay Time / Duck Rate はカーブで拍長を±2オクターブ変調可能
+//    (dlyBeats/duckBeats として合成済みの拍数を受け取る)
+//  - Chorus/Delay の固定長バッファは prepareToPlay でのSR依存事前確保
+//    (processBlock 内でのアロケーションは一切無し)
 // ==========================================
 #pragma once
 
@@ -560,66 +560,6 @@ namespace lfx
     };
 
     // ------------------------------------------
-    // Freeze / Smear (SR依存事前確保)
-    // ------------------------------------------
-    class FreezeSmear
-    {
-    public:
-        void prepareToPlay(double sr)
-        {
-            sampleRate = sr;
-            // 最大ループ長 1000ms + マージン → 1.2s 分を確保
-            halfSize = juce::jmax(4096, (int)(sr * 1.2));
-            buffer.assign((size_t)halfSize * 2, 0.0f);
-            writeIndex = 0;
-            lpStateL = lpStateR = 0.0f;
-        }
-
-        void process(float& inOutL, float& inOutR, float amount,
-                     float sizeMs, float feedback, float damp) noexcept
-        {
-            if (buffer.empty()) return;
-
-            // amount==0 でもバッファ書き込みは継続 (残存データ爆発防止)
-            const int delaySamps = juce::jlimit(64, halfSize - 2,
-                                                (int)(sampleRate * (double)sizeMs * 0.001));
-            int readIndex = writeIndex - delaySamps;
-            if (readIndex < 0) readIndex += halfSize;
-
-            float smL = buffer[(size_t)readIndex * 2];
-            float smR = buffer[(size_t)readIndex * 2 + 1];
-
-            const float lpCoef = 1.0f - damp * 0.85f;
-            lpStateL += lpCoef * (smL - lpStateL);
-            lpStateR += lpCoef * (smR - lpStateR);
-            smL = lpStateL;
-            smR = lpStateR;
-
-            // クロスフェード蓄積器: in×(1-fb)+loop×fb (定常ゲイン1収束)
-            const float fb = juce::jlimit(0.0f, 0.99f, feedback);
-            buffer[(size_t)writeIndex * 2] =
-                lfx::antiDenormal(lfx::safeLoopSaturate(inOutL * (1.0f - fb) + smL * fb));
-            buffer[(size_t)writeIndex * 2 + 1] =
-                lfx::antiDenormal(lfx::safeLoopSaturate(inOutR * (1.0f - fb) + smR * fb));
-
-            if (++writeIndex >= halfSize) writeIndex = 0;
-
-            if (amount > 0.0f)
-            {
-                inOutL = inOutL * (1.0f - amount) + smL * amount;
-                inOutR = inOutR * (1.0f - amount) + smR * amount;
-            }
-        }
-
-    private:
-        double sampleRate = 44100.0;
-        std::vector<float> buffer;
-        int halfSize = 0;
-        int writeIndex = 0;
-        float lpStateL = 0.0f, lpStateR = 0.0f;
-    };
-
-    // ------------------------------------------
     // Beat Ducking (テンポ同期ポンプ / LIFT-X追加・独立スロット)
     //  PPQ同期でグリッドに正確に張り付く。サイドチェイン入力不要。
     // ------------------------------------------
@@ -784,21 +724,20 @@ namespace lfx
 } // namespace lfx
 
 // ==========================================
-// FxChain — 6スロット直列
+// FxChain — 5スロット直列 (スロット=適用順序)
 // ==========================================
 class FxChain
 {
 public:
     FxChain() = default;
 
-    static constexpr int kNumSlots = 6; // FXの数と一致
+    static constexpr int kNumSlots = 5;
 
-    enum FxType { None = 0, Saturation, Chorus, Delay, Freeze, Reverb, Ducking };
+    enum FxType { None = 0, Saturation, Chorus, Delay, Reverb, Ducking };
 
     static juce::StringArray getTypeNames()
     {
-        return { "None", "Saturation (ADAA)", "Ensemble Chorus", "Tape Delay",
-                 "Freeze", "Shimmer Reverb", "Beat Ducking" };
+        return { "None", "Saturation", "Chorus", "Delay", "Reverb", "Ducking" };
     }
     static juce::StringArray getSatAlgoNames()
     {
@@ -823,55 +762,61 @@ public:
         return beats[juce::jlimit(0, 9, idx)];
     }
 
-    // Duckingレート表 (1サイクルの拍数)
+    // Duckingレート表 (1サイクルの拍数, 1Bar〜1/64, 付点/三連対応)
     static juce::StringArray getDuckRateNames()
     {
-        return { "1 Bar", "1/2", "1/4", "1/8" };
+        return { "1 Bar", "1/2.", "1/2", "1/2T", "1/4.", "1/4", "1/4T",
+                 "1/8.", "1/8", "1/8T", "1/16.", "1/16", "1/16T",
+                 "1/32.", "1/32", "1/32T", "1/64" };
     }
     static float duckRateToBeats(int idx) noexcept
     {
-        static const float beats[4] = { 4.0f, 2.0f, 1.0f, 0.5f };
-        return beats[juce::jlimit(0, 3, idx)];
+        static const float beats[17] = {
+            4.0f, 3.0f, 2.0f, 4.0f / 3.0f, 1.5f, 1.0f, 2.0f / 3.0f,
+            0.75f, 0.5f, 1.0f / 3.0f, 0.375f, 0.25f, 1.0f / 6.0f,
+            0.1875f, 0.125f, 1.0f / 12.0f, 0.0625f };
+        return beats[juce::jlimit(0, 16, idx)];
     }
 
+    // パラメーターはFX毎 (AMT含む)。マルチENVカーブによる変調は
+    // プロセッサー側で合成済みの値を渡す (ブロックレート更新+FX内部平滑)。
     struct Params
     {
-        std::array<int, kNumSlots> type {};
-        std::array<float, kNumSlots> amount {};   // 0..1 (Wet量。FXカーブ変調は合成済みで渡す)
+        std::array<int, kNumSlots> type {};   // FxType (スロット=適用順序)
         double bpm = 120.0;
-        double ppq = 0.0;        // ブロック頭のPPQ (Ducking同期用)
+        double ppq = 0.0;
         bool   playing = false;
 
-        // --- Saturation 詳細 ---
+        // --- Saturation ---
+        float satAmt = 0.0f;
         int   satAlgo = 0;
         float satDrive = 2.0f;      // 1..12
-        float satPreHz = 20.0f;     // 20..2000 (20≒スルー)
+        float satPreHz = 20.0f;     // 20..2000
         float satTrimDb = 0.0f;     // -12..+12
 
-        // --- Chorus 詳細 ---
-        float choRate = 0.8f;       // Hz
-        float choDepth = 0.5f;      // 0..1
-        float choWidth = 1.0f;      // 0..1
+        // --- Chorus ---
+        float choAmt = 0.0f;
+        float choRate = 0.8f;
+        float choDepth = 0.5f;
+        float choWidth = 1.0f;
 
-        // --- Delay 詳細 ---
-        int   dlyTime = 5;          // getDelayTimeNames() インデックス
-        float dlyFeedback = 0.45f;  // 0..0.95
-        float dlyDuck = 0.5f;       // 0..1
-        float dlyDamp = 0.3f;       // 0..1
+        // --- Delay ---
+        float dlyAmt = 0.0f;
+        float dlyBeats = 0.5f;      // 合成済み拍数 (カーブで±2oct変調可)
+        float dlyFeedback = 0.45f;
+        float dlyDuck = 0.5f;
+        float dlyDamp = 0.3f;
 
-        // --- Freeze 詳細 ---
-        float frzSize = 100.0f;     // ms
-        float frzFeedback = 0.9f;   // 0..0.99
-        float frzDamp = 0.2f;       // 0..1
+        // --- Reverb ---
+        float revAmt = 0.0f;
+        float revDecay = 0.7f;
+        float revShimmer = 0.4f;
+        float revDamp = 0.3f;
+        float revMod = 0.4f;
 
-        // --- Reverb 詳細 ---
-        float revDecay = 0.7f;      // 0..1
-        float revShimmer = 0.4f;    // 0..1
-        float revDamp = 0.3f;       // 0..1
-        float revMod = 0.4f;        // 0..1
-
-        // --- Ducking 詳細 (LIFT-X追加) ---
-        int   duckRate = 2;         // getDuckRateNames() インデックス
+        // --- Ducking ---
+        float duckAmt = 0.0f;
+        float duckBeats = 1.0f;     // 合成済み拍数
         float duckShape = 2.0f;     // 0.5..8
     };
 
@@ -880,7 +825,6 @@ public:
         sampleRate = sr;
         chorus.prepareToPlay(sr);
         delay.prepareToPlay(sr);
-        freeze.prepareToPlay(sr);
         reverb.prepareToPlay(sr);
         ducker.prepareToPlay(sr);
         dcCoef = std::exp((float)(-1.0 / (0.004523 * sr)));
@@ -894,7 +838,7 @@ public:
         if (numSamples <= 0 || channels == 0) return;
 
         // 全スロット None のときのみ早期リターン
-        // (amount==0 でも Delay/Freeze/Reverb の内部バッファ更新は継続する)
+        // (amt==0 でも Delay/Reverb の内部バッファ更新は継続する)
         bool anyTyped = false;
         for (int s = 0; s < kNumSlots; ++s)
             if (p.type[(size_t)s] > 0) anyTyped = true;
@@ -907,12 +851,10 @@ public:
         const float trimGain = juce::Decibels::decibelsToGain(juce::jlimit(-12.0f, 12.0f, p.satTrimDb));
         const float preAlpha = 1.0f / (1.0f + juce::MathConstants<float>::twoPi
                                        * juce::jlimit(20.0f, 2000.0f, p.satPreHz) / (float)sampleRate);
-        const float dlyBeats = delayTimeToBeats(p.dlyTime);
-        const float duckBeats = duckRateToBeats(p.duckRate);
 
-        // Ducking: 再生中はブロック頭でPPQへ位相同期 (グリッドに正確に張り付く)
+        // Ducking: 再生中はブロック頭でPPQへ位相同期
         if (p.playing)
-            ducker.syncTo(p.ppq, duckBeats);
+            ducker.syncTo(p.ppq, p.duckBeats);
 
         // スロット間ソフトクリップ
         auto interSlotClip = [](float x) noexcept -> float
@@ -931,31 +873,23 @@ public:
 
             for (int s = 0; s < kNumSlots; ++s)
             {
-                const int fxType = p.type[(size_t)s];
-                if (fxType == None) continue;
-
-                const float amt = p.amount[(size_t)s];
-
-                switch (fxType)
+                switch (p.type[(size_t)s])
                 {
                 case Saturation:
-                    if (amt > 0.0005f)
-                        saturate(l, r, amt, satType, p.satDrive, preAlpha, trimGain);
+                    if (p.satAmt > 0.0005f)
+                        saturate(l, r, p.satAmt, satType, p.satDrive, preAlpha, trimGain);
                     break;
                 case Chorus:
-                    chorus.process(l, r, amt, p.choRate, p.choDepth, p.choWidth);
+                    chorus.process(l, r, p.choAmt, p.choRate, p.choDepth, p.choWidth);
                     break;
                 case Delay:
-                    delay.process(l, r, amt, p.bpm, dlyBeats, p.dlyFeedback, p.dlyDuck, p.dlyDamp);
-                    break;
-                case Freeze:
-                    freeze.process(l, r, amt, p.frzSize, p.frzFeedback, p.frzDamp);
+                    delay.process(l, r, p.dlyAmt, p.bpm, p.dlyBeats, p.dlyFeedback, p.dlyDuck, p.dlyDamp);
                     break;
                 case Reverb:
-                    reverb.process(l, r, amt, p.revDecay, p.revShimmer, p.revDamp, p.revMod);
+                    reverb.process(l, r, p.revAmt, p.revDecay, p.revShimmer, p.revDamp, p.revMod);
                     break;
                 case Ducking:
-                    ducker.process(l, r, amt, p.bpm, duckBeats, p.duckShape);
+                    ducker.process(l, r, p.duckAmt, p.bpm, p.duckBeats, p.duckShape);
                     break;
                 default: break;
                 }
@@ -999,7 +933,6 @@ private:
 
     lfx::EnsembleChorus chorus;
     lfx::TapeDelay delay;
-    lfx::FreezeSmear freeze;
     lfx::ShimmerReverb reverb;
     lfx::BeatDucker ducker;
 

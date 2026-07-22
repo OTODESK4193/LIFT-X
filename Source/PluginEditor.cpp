@@ -5,7 +5,7 @@
 
 LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
     : AudioProcessorEditor(&p), proc(p),
-      mainPanel(p), pitchPanel(p), filterPanel(p), fxPanel(p)
+      mainPanel(p), oscEnvPanel(p), filterPanel(p), fxPanel(p)
 {
     setLookAndFeel(&lnf);
 
@@ -15,12 +15,12 @@ LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
         addAndMakeVisible(b);
     };
     initTab(mainTabButton, Tab::Main);
-    initTab(pitchTabButton, Tab::Pitch);
+    initTab(oscEnvTabButton, Tab::OscEnv);
     initTab(filterTabButton, Tab::Filter);
     initTab(fxTabButton, Tab::Fx);
 
     addChildComponent(mainPanel);
-    addChildComponent(pitchPanel);
+    addChildComponent(oscEnvPanel);
     addChildComponent(filterPanel);
     addChildComponent(fxPanel);
 
@@ -38,17 +38,17 @@ void LiftXAudioProcessorEditor::setActiveTab(Tab t)
     activeTab = t;
 
     mainPanel.setVisible(t == Tab::Main);
-    pitchPanel.setVisible(t == Tab::Pitch);
+    oscEnvPanel.setVisible(t == Tab::OscEnv);
     filterPanel.setVisible(t == Tab::Filter);
     fxPanel.setVisible(t == Tab::Fx);
 
     // カーブはCurveStoreが真実の源: タブ表示時に再読込 (ステート復元対応)
-    if (t == Tab::Pitch)  pitchPanel.refresh();
+    if (t == Tab::OscEnv) oscEnvPanel.refresh();
     if (t == Tab::Filter) filterPanel.refresh();
     if (t == Tab::Fx)     fxPanel.refresh();
 
     styleTabButton(mainTabButton, t == Tab::Main);
-    styleTabButton(pitchTabButton, t == Tab::Pitch);
+    styleTabButton(oscEnvTabButton, t == Tab::OscEnv);
     styleTabButton(filterTabButton, t == Tab::Filter);
     styleTabButton(fxTabButton, t == Tab::Fx);
 }
@@ -87,7 +87,7 @@ void LiftXAudioProcessorEditor::resized()
     header.removeFromRight(260);
     header = header.withSizeKeepingCentre(4 * 96 + 3 * 8, 28);
 
-    juce::TextButton* tabs[4] = { &mainTabButton, &pitchTabButton, &filterTabButton, &fxTabButton };
+    juce::TextButton* tabs[4] = { &mainTabButton, &oscEnvTabButton, &filterTabButton, &fxTabButton };
     for (auto* b : tabs)
     {
         b->setBounds(header.removeFromLeft(96));
@@ -97,7 +97,7 @@ void LiftXAudioProcessorEditor::resized()
     // パネル領域
     const auto panelArea = r.reduced(8, 4);
     mainPanel.setBounds(panelArea);
-    pitchPanel.setBounds(panelArea);
+    oscEnvPanel.setBounds(panelArea);
     filterPanel.setBounds(panelArea);
     fxPanel.setBounds(panelArea);
 }

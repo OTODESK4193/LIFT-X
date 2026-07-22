@@ -4,14 +4,20 @@
 //
 //  - CurveSnapshot : 固定サイズPOD。最大32ポイント + セグメント毎のテンション。
 //                    evaluate() は DSP と GUI 描画で共有され、表示と音のズレが無い。
-//  - CurveStore    : 9系統のカーブを保持。GUI(メッセージスレッド)が publish() し、
+//  - CurveStore    : 31系統のカーブを保持。GUI(メッセージスレッド)が publish() し、
 //                    オーディオスレッドは atomic インデックス経由で read() するだけの
-//                    ロックフリー設計（リングバッファ8面。旧スナップショットは
-//                    上書きまで保持されるため解放待ちが発生しない）。
+//                    ロックフリー設計（リングバッファ8面）。
 //  - processBlock 内でのアロケーション/ロックは一切無い。
-//  - カーブはホストパラメーターにしない（APVTS外）。これにより計画書の
-//    「内部カーブターゲットの withAutomatable(false) 隔離」と同じ効果を
-//    より強い形で達成し、Ableton Live のオートメーション巻き戻りを防ぐ。
+//  - カーブはホストパラメーターにしない（APVTS外）。Ableton Live の
+//    オートメーション巻き戻り現象から構造的に隔離される。
+//
+//  カーブの意味 (v0.2):
+//   - OscPitch  : 下=StartKey / 上=EndKey (ユニポーラ補間, デフォルト 0→1 上昇)
+//   - NoisePitch: 中央=基準 / ±RANGE oct (バイポーラ)
+//   - Filter    : 中央=CUTOFF / ±5oct×ENV AMT (バイポーラ)
+//   - その他 (Level/Detune/Spread/Res/FXパラメーター):
+//       バイポーラ加算式。中央(0.5)=ノブ現在値、上下でパラメーターレンジの
+//       半分を±加算 (クランプあり)。デフォルトは中央フラット=変化なし。
 // ==========================================
 #pragma once
 
@@ -108,7 +114,7 @@ struct CurveSnapshot
             s.pts[(size_t)s.numPoints++] = p;
         }
         if (s.numPoints < 2)
-            s = makeDefault(0.5f, 1.0f);
+            s = makeDefault(0.5f, 0.5f);
         // 端点を強制 (x=0 / x=1)
         s.pts[0].x = 0.0f;
         s.pts[(size_t)s.numPoints - 1].x = 1.0f;
@@ -117,35 +123,74 @@ struct CurveSnapshot
 };
 
 // ------------------------------------------
-// 9系統カーブの保管庫 (ロックフリーSPSC)
+// 31系統カーブの保管庫 (ロックフリーSPSC)
 //   書き手: GUI/メッセージスレッドのみ
-//   読み手: オーディオスレッド (readで最新publish済みを取得)
+//   読み手: オーディオスレッド
 // ------------------------------------------
 class CurveStore
 {
 public:
     enum Index
     {
-        PitchOsc1 = 0, PitchOsc2, PitchOsc3, PitchNoise,
-        Filter1, Filter2, Filter3, Filter4,
-        FxCurve,
-        kNumCurves
+        // OSC1-3: [Pitch, Level, Detune, Spread] × 3
+        Osc1Pitch = 0, Osc1Level, Osc1Detune, Osc1Spread,
+        Osc2Pitch,     Osc2Level, Osc2Detune, Osc2Spread,
+        Osc3Pitch,     Osc3Level, Osc3Detune, Osc3Spread,
+        // ノイズ
+        NoisePitch = 12, NoiseLevel, NoiseRes,
+        // フィルター
+        Filter1 = 15, Filter2, Filter3, Filter4,
+        // FX
+        SatAmt = 19, SatDrive,
+        ChoAmt, ChoDepth,
+        DlyAmt, DlyFb, DlyTime,
+        RevAmt, RevShimmer,
+        DuckAmt, DuckRate, DuckShape,
+        kNumCurves // = 31
     };
+
+    // OSCソース(0-2) × ターゲット(0=Pitch 1=Level 2=Detune 3=Spread)
+    static int oscCurve(int osc, int target) noexcept
+    {
+        return juce::jlimit(0, 2, osc) * 4 + juce::jlimit(0, 3, target);
+    }
+    // ノイズターゲット(0=Pitch 1=Level 2=Res)
+    static int noiseCurve(int target) noexcept
+    {
+        return NoisePitch + juce::jlimit(0, 2, target);
+    }
 
     static const char* name(int idx)
     {
         static const char* names[kNumCurves] = {
-            "PITCH OSC1", "PITCH OSC2", "PITCH OSC3", "PITCH NOISE",
-            "FILTER 1", "FILTER 2", "FILTER 3", "FILTER 4", "FX" };
+            "OSC1 PITCH", "OSC1 LEVEL", "OSC1 DETUNE", "OSC1 SPREAD",
+            "OSC2 PITCH", "OSC2 LEVEL", "OSC2 DETUNE", "OSC2 SPREAD",
+            "OSC3 PITCH", "OSC3 LEVEL", "OSC3 DETUNE", "OSC3 SPREAD",
+            "NOISE PITCH", "NOISE LEVEL", "NOISE RES",
+            "FILTER 1", "FILTER 2", "FILTER 3", "FILTER 4",
+            "SAT AMT", "SAT DRIVE",
+            "CHORUS AMT", "CHORUS DEPTH",
+            "DELAY AMT", "DELAY FB", "DELAY TIME",
+            "REVERB AMT", "REVERB SHIMMER",
+            "DUCK AMT", "DUCK RATE", "DUCK SHAPE" };
         return names[juce::jlimit(0, kNumCurves - 1, idx)];
     }
 
     CurveStore()
     {
-        // デフォルト: ピッチ/フィルターは中央→上昇、FXは0→1
-        for (int i = 0; i < 4; ++i) publish(i, CurveSnapshot::makeDefault(0.5f, 1.0f));
-        for (int i = 4; i < 8; ++i) publish(i, CurveSnapshot::makeDefault(0.5f, 1.0f));
-        publish(FxCurve, CurveSnapshot::makeDefault(0.0f, 1.0f));
+        // デフォルト:
+        //  OSCピッチ = 0→1 上昇 (Start→Endへのライザー)
+        //  ノイズピッチ/フィルター = 中央→上昇
+        //  モジュレーション/FX = 中央フラット (変化なし)
+        for (int i = 0; i < kNumCurves; ++i)
+            publish(i, CurveSnapshot::makeDefault(0.5f, 0.5f));
+
+        publish(Osc1Pitch, CurveSnapshot::makeDefault(0.0f, 1.0f));
+        publish(Osc2Pitch, CurveSnapshot::makeDefault(0.0f, 1.0f));
+        publish(Osc3Pitch, CurveSnapshot::makeDefault(0.0f, 1.0f));
+        publish(NoisePitch, CurveSnapshot::makeDefault(0.5f, 1.0f));
+        for (int f = Filter1; f <= Filter4; ++f)
+            publish(f, CurveSnapshot::makeDefault(0.5f, 1.0f));
     }
 
     // --- オーディオスレッド: 最新スナップショット参照 (コピー無し) ---
@@ -171,6 +216,7 @@ public:
     juce::ValueTree toValueTree() const
     {
         juce::ValueTree vt("CURVES");
+        vt.setProperty("version", 2, nullptr);
         for (int i = 0; i < kNumCurves; ++i)
         {
             juce::ValueTree c("CURVE");
@@ -184,6 +230,8 @@ public:
     void fromValueTree(const juce::ValueTree& vt)
     {
         if (!vt.isValid()) return;
+        // v1 (9カーブ) はインデックス互換が無いため読み込まない
+        if ((int)vt.getProperty("version", 1) < 2) return;
         for (int i = 0; i < vt.getNumChildren(); ++i)
         {
             auto c = vt.getChild(i);

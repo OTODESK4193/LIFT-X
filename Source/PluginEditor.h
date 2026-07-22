@@ -10,7 +10,7 @@
 #include "GUI/ArcDial.h"
 #include "GUI/ColorPalette.h"
 #include "GUI/MainPanel.h"
-#include "GUI/PitchPanel.h"
+#include "GUI/OscEnvPanel.h"
 #include "GUI/FilterPanel.h"
 #include "GUI/FxPanel.h"
 
@@ -24,7 +24,7 @@ public:
     void resized() override;
 
 private:
-    enum class Tab { Main, Pitch, Filter, Fx };
+    enum class Tab { Main, OscEnv, Filter, Fx };
 
     void setActiveTab(Tab t);
     void styleTabButton(juce::TextButton& b, bool active);
@@ -33,13 +33,13 @@ private:
     ArcDialLookAndFeel lnf;
 
     juce::TextButton mainTabButton   { "MAIN" };
-    juce::TextButton pitchTabButton  { "PITCH" };
+    juce::TextButton oscEnvTabButton { "OSC ENV" };
     juce::TextButton filterTabButton { "FILTER" };
     juce::TextButton fxTabButton     { "FX" };
     Tab activeTab = Tab::Main;
 
     MainPanel mainPanel;
-    PitchPanel pitchPanel;
+    OscEnvPanel oscEnvPanel;
     FilterPanel filterPanel;
     FxPanel fxPanel;
 

@@ -1,11 +1,11 @@
 // ==========================================
 // File: PluginProcessor.h
-// LIFT-X プロセッサー層
-//  - DSPコアとGUIの完全分離 (DSPフォルダはGUIヘッダを一切includeしない)
-//  - リアルタイム安全: processBlock内アロケーション/ロック禁止を徹底
+// LIFT-X プロセッサー層 (v0.2)
+//  - DSPコアとGUIの完全分離 / processBlock内アロケーション・ロック禁止
 //  - DAWフェイルセーフ: SR/ブロックサイズ不一致時の即時ゼロクリア+リセット
-//  - カーブ(マルチENV)はAPVTS外のCurveStoreで管理し、ホストオートメーション
-//    から完全隔離 (計画書のwithAutomatable(false)方針の強化版)
+//  - マルチENV(31系統)はAPVTS外のCurveStoreで管理 (オートメーション隔離)
+//  - OSC毎のカスタムWavetable (SPECTRA8方式のグローバル設定でフォルダ永続化)
+//  - MIDI Learn (StartKey/EndKey設定用の最終ノート通知)
 // ==========================================
 #pragma once
 
@@ -53,20 +53,38 @@ public:
 
     // ---- GUIとの橋渡し ----
     CurveStore& getCurves() noexcept { return mCurves; }
-    const RiserEngine& getEngine() const noexcept { return mEngine; }
     float getUiProgress() const noexcept { return mEngine.uiProgress.load(std::memory_order_relaxed); }
 
-    // ---- カスタムWavetable (メッセージスレッド専用 / SPECTRA8方式) ----
-    bool loadCustomWavetable(const juce::File& file);
-    void clearCustomWavetable();
-    juce::String getCustomWavetablePath() const
-    {
-        return apvts.state.getProperty("customWavetablePath", juce::String()).toString();
-    }
-    bool hasCustomWavetable() const { return mWavetable.hasCustom(); }
-    const MorphWavetable& getWavetable() const noexcept { return mWavetable; }
+    // ---- MIDI Learn (StartKey/EndKey設定用) ----
+    //  GUI側はイベントカウンタの増加を監視し、最終ノート番号を取得する。
+    int getNoteEventCount() const noexcept { return mNoteEvents.load(std::memory_order_relaxed); }
+    int getLastNote() const noexcept { return mLastNote.load(std::memory_order_relaxed); }
 
-    // Bars選択肢 (計画書: 1,2,4,8,16)
+    // ---- カスタムWavetable (OSC毎 / メッセージスレッド専用) ----
+    bool loadCustomWavetable(int oscIdx, const juce::File& file);
+    void clearCustomWavetable(int oscIdx);
+    juce::String getCustomWavetablePath(int oscIdx) const
+    {
+        return apvts.state.getProperty("customWavetablePath" + juce::String(oscIdx + 1),
+                                       juce::String()).toString();
+    }
+    bool hasCustomWavetable(int oscIdx) const
+    {
+        return mWavetables[(size_t)juce::jlimit(0, 2, oscIdx)].hasCustom();
+    }
+    const MorphWavetable& getWavetable(int oscIdx) const noexcept
+    {
+        return mWavetables[(size_t)juce::jlimit(0, 2, oscIdx)];
+    }
+
+    // ---- グローバル設定 (SPECTRA8方式: セッションと独立してユーザー設定へ永続化) ----
+    //   Windows: %APPDATA%/LIFT-X/LIFT-X.settings
+    //   Wavetableフォルダの登録パスはここに置く (毎回登録し直さなくて済む)
+    static juce::PropertiesFile& getGlobalSettings();
+    static juce::String getGlobalWavetableDir();
+    static void setGlobalWavetableDir(const juce::String& path);
+
+    // Bars選択肢 (1,2,4,8,16)
     static int barsFromChoice(int idx) noexcept
     {
         static const int b[5] = { 1, 2, 4, 8, 16 };
@@ -80,49 +98,60 @@ private:
     void gatherFxParams(FxChain::Params& fp, double bpm, double ppq, bool playing) const noexcept;
 
     // ---- DSPモジュール ----
-    MorphWavetable mWavetable;
+    std::array<MorphWavetable, RiserEngine::kNumOscs> mWavetables;
     RiserEngine mEngine;
     FxChain mFx;
     CurveStore mCurves;
 
     juce::AudioFormatManager mFormatManager;
 
-    // ---- フェイルセーフ用 (Ableton Live のSR変更先行processBlock対策) ----
+    // ---- フェイルセーフ用 ----
     bool mPrepared = false;
     double mPreparedSampleRate = 0.0;
     int mPreparedBlockSize = 0;
 
-    // モノラルホスト用スクラッチ (prepareToPlayで事前確保)
     std::vector<float> mScratchR;
-
-    // マスターゲイン平滑
     juce::LinearSmoothedValue<float> mMasterSm;
 
-    // ---- キャッシュ済みパラメーターポインタ (processBlock内のルックアップ排除) ----
+    // ---- MIDI Learn ----
+    std::atomic<int> mLastNote { -1 };
+    std::atomic<int> mNoteEvents { 0 };
+
+    // ---- キャッシュ済みパラメーターポインタ ----
     std::atomic<float>* pLift = nullptr;
     std::atomic<float>* pBars = nullptr;
     std::atomic<float>* pAttack = nullptr;
     std::atomic<float>* pRelease = nullptr;
     std::atomic<float>* pMaster = nullptr;
 
-    struct OscPtrs { std::atomic<float> *on, *wave, *level, *coarse, *uni, *det, *spread, *range; };
+    struct OscPtrs
+    {
+        std::atomic<float> *on, *solo, *mute, *wave, *pos, *level,
+                           *coarse, *uni, *det, *spread, *keyStart, *keyEnd;
+    };
     std::array<OscPtrs, RiserEngine::kNumOscs> pOsc {};
 
-    std::atomic<float> *pNoiseType = nullptr, *pNoiseLevel = nullptr,
+    std::atomic<float> *pNoiseSolo = nullptr, *pNoiseMute = nullptr,
+                       *pNoiseType = nullptr, *pNoiseLevel = nullptr,
                        *pNoisePitch = nullptr, *pNoiseRes = nullptr, *pNoiseRange = nullptr;
 
-    struct FltPtrs { std::atomic<float> *on, *type, *cutoff, *res, *env; };
+    struct FltPtrs
+    {
+        std::atomic<float> *on, *type, *cutoff, *res, *env;
+        std::array<std::atomic<float>*, RiserEngine::kNumSources> route {};
+    };
     std::array<FltPtrs, RiserEngine::kNumFilters> pFlt {};
 
-    struct FxSlotPtrs { std::atomic<float> *type, *amt, *env; };
-    std::array<FxSlotPtrs, FxChain::kNumSlots> pFxSlot {};
+    std::array<std::atomic<float>*, FxChain::kNumSlots> pFxType {};
 
-    std::atomic<float> *pSatAlgo = nullptr, *pSatDrive = nullptr, *pSatPre = nullptr, *pSatTrim = nullptr;
-    std::atomic<float> *pChoRate = nullptr, *pChoDepth = nullptr, *pChoWidth = nullptr;
-    std::atomic<float> *pDlyTime = nullptr, *pDlyFb = nullptr, *pDlyDuck = nullptr, *pDlyDamp = nullptr;
-    std::atomic<float> *pFrzSize = nullptr, *pFrzFb = nullptr, *pFrzDamp = nullptr;
-    std::atomic<float> *pRevDecay = nullptr, *pRevShimmer = nullptr, *pRevDamp = nullptr, *pRevMod = nullptr;
-    std::atomic<float> *pDuckRate = nullptr, *pDuckShape = nullptr;
+    std::atomic<float> *pSatAmt = nullptr, *pSatAlgo = nullptr, *pSatDrive = nullptr,
+                       *pSatPre = nullptr, *pSatTrim = nullptr;
+    std::atomic<float> *pChoAmt = nullptr, *pChoRate = nullptr, *pChoDepth = nullptr, *pChoWidth = nullptr;
+    std::atomic<float> *pDlyAmt = nullptr, *pDlyTime = nullptr, *pDlyFb = nullptr,
+                       *pDlyDuck = nullptr, *pDlyDamp = nullptr;
+    std::atomic<float> *pRevAmt = nullptr, *pRevDecay = nullptr, *pRevShimmer = nullptr,
+                       *pRevDamp = nullptr, *pRevMod = nullptr;
+    std::atomic<float> *pDuckAmt = nullptr, *pDuckRate = nullptr, *pDuckShape = nullptr;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(LiftXAudioProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LiftXAudioProcessor)

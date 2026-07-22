@@ -3,94 +3,182 @@
 // ==========================================
 #include "FxPanel.h"
 
-const char* FxPanel::groupName(int i)
+const std::array<FxPanel::FxDef, 5>& FxPanel::defs()
 {
-    static const char* names[6] = { "SATURATION", "CHORUS", "DELAY", "FREEZE", "REVERB", "DUCKING" };
-    return names[juce::jlimit(0, 5, i)];
+    static const std::array<FxDef, 5> d = { {
+        { "SAT",    2, { CurveStore::SatAmt,  CurveStore::SatDrive, 0 },
+                       { "AMT", "DRIVE", "" } },
+        { "CHORUS", 2, { CurveStore::ChoAmt,  CurveStore::ChoDepth, 0 },
+                       { "AMT", "DEPTH", "" } },
+        { "DELAY",  3, { CurveStore::DlyAmt,  CurveStore::DlyFb, CurveStore::DlyTime },
+                       { "AMT", "FB", "TIME" } },
+        { "REVERB", 2, { CurveStore::RevAmt,  CurveStore::RevShimmer, 0 },
+                       { "AMT", "SHIMMER", "" } },
+        { "DUCK",   3, { CurveStore::DuckAmt, CurveStore::DuckRate, CurveStore::DuckShape },
+                       { "AMT", "RATE", "SHAPE" } },
+    } };
+    return d;
 }
 
 FxPanel::FxPanel(LiftXAudioProcessor& p)
     : proc(p)
 {
-    // ---- 6スロット ----
+    // ---- 5スロット (適用順序) ----
+    chainLabel.setText("CHAIN:", juce::dontSendNotification);
+    chainLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+    chainLabel.setColour(juce::Label::textColourId, LiftColors::textDim);
+    addAndMakeVisible(chainLabel);
+
     for (int s = 0; s < FxChain::kNumSlots; ++s)
     {
-        const juce::String n(s + 1);
-
-        slotLabel[(size_t)s].setText("SLOT " + n, juce::dontSendNotification);
-        slotLabel[(size_t)s].setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
-        slotLabel[(size_t)s].setColour(juce::Label::textColourId, LiftColors::textDim);
-        slotLabel[(size_t)s].setJustificationType(juce::Justification::centred);
-        addAndMakeVisible(slotLabel[(size_t)s]);
-
         slotType[(size_t)s].addItemList(FxChain::getTypeNames(), 1);
         addAndMakeVisible(slotType[(size_t)s]);
         comboAtts.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-            proc.apvts, "fx" + n + "Type", slotType[(size_t)s]));
-
-        mkKnob(slotAmt[(size_t)s], "AMT", "fx" + n + "Amt", LiftColors::accentFx);
-        mkKnob(slotEnv[(size_t)s], "ENV", "fx" + n + "Env", LiftColors::accentFx);
+            proc.apvts, "fx" + juce::String(s + 1) + "Type", slotType[(size_t)s]));
     }
 
-    // ---- Saturation ----
+    // ---- FXサブタブ / カーブサブタブ ----
+    for (int i = 0; i < 5; ++i)
+    {
+        fxTabs[(size_t)i] = std::make_unique<juce::TextButton>(defs()[(size_t)i].name);
+        fxTabs[(size_t)i]->onClick = [this, i] { setFx(i); };
+        addAndMakeVisible(*fxTabs[(size_t)i]);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        curveTabs[(size_t)i] = std::make_unique<juce::TextButton>("");
+        curveTabs[(size_t)i]->onClick = [this, i] { setCurve(i); };
+        addAndMakeVisible(*curveTabs[(size_t)i]);
+    }
+
+    addAndMakeVisible(editor);
+    editor.setBipolar(true);
+    editor.setProgressProvider([this] { return proc.getUiProgress(); });
+    editor.onChanged = [this](const CurveSnapshot& s)
+    {
+        const auto& d = defs()[(size_t)activeFx];
+        proc.getCurves().publish(d.curveIdx[juce::jlimit(0, d.numCurves - 1, activeCurve)], s);
+    };
+
+    hint.setFont(juce::Font(juce::FontOptions(12.0f)));
+    hint.setColour(juce::Label::textColourId, LiftColors::textDim);
+    hint.setJustificationType(juce::Justification::centredLeft);
+    hint.setText(juce::CharPointer_UTF8(
+        "\xe4\xb8\xad\xe5\xa4\xae=\xe3\x83\x8e\xe3\x83\x96\xe7\x8f\xbe\xe5\x9c\xa8\xe5\x80\xa4 / "
+        "\xe4\xb8\x8a\xe4\xb8\x8b\xe3\x81\xa7\xc2\xb1\xe5\xa4\x89\xe8\xaa\xbf   "
+        "TIME/RATE\xe3\x81\xaf\xc2\xb1""2\xe3\x82\xaa\xe3\x82\xaf\xe3\x82\xbf\xe3\x83\xbc\xe3\x83\x96"
+        " (\xe4\xb8\x8b\xe3\x81\x92\xe3\x82\x8b\xe3\x81\xbb\xe3\x81\xa9\xe5\x8a\xa0\xe9\x80\x9f)"),
+        juce::dontSendNotification);
+    addAndMakeVisible(hint);
+
+    // ---- 詳細コントロール ----
+    mkKnob(satAmt, "AMT", "satAmt", LiftColors::rose);
     mkCombo(satAlgoBox, satAlgoLabel, "ALGO", "satAlgo", FxChain::getSatAlgoNames());
     mkKnob(satDrive, "DRIVE", "satDrive", LiftColors::rose);
     mkKnob(satPre, "PRE HPF", "satPre", LiftColors::rose);
     mkKnob(satTrim, "TRIM", "satTrim", LiftColors::rose);
 
-    // ---- Chorus ----
+    mkKnob(choAmt, "AMT", "choAmt", LiftColors::mint);
     mkKnob(choRate, "RATE", "choRate", LiftColors::mint);
     mkKnob(choDepth, "DEPTH", "choDepth", LiftColors::mint);
     mkKnob(choWidth, "WIDTH", "choWidth", LiftColors::mint);
 
-    // ---- Delay ----
+    mkKnob(dlyAmt, "AMT", "dlyAmt", LiftColors::babyBlue);
     mkCombo(dlyTimeBox, dlyTimeLabel, "TIME", "dlyTime", FxChain::getDelayTimeNames());
     mkKnob(dlyFb, "FB", "dlyFb", LiftColors::babyBlue);
     mkKnob(dlyDuck, "DUCK", "dlyDuck", LiftColors::babyBlue);
     mkKnob(dlyDamp, "DAMP", "dlyDamp", LiftColors::babyBlue);
 
-    // ---- Freeze ----
-    mkKnob(frzSize, "SIZE", "frzSize", LiftColors::lilac);
-    mkKnob(frzFb, "FB", "frzFb", LiftColors::lilac);
-    mkKnob(frzDamp, "DAMP", "frzDamp", LiftColors::lilac);
-
-    // ---- Reverb ----
+    mkKnob(revAmt, "AMT", "revAmt", LiftColors::lavender);
     mkKnob(revDecay, "DECAY", "revDecay", LiftColors::lavender);
     mkKnob(revShimmer, "SHIMMER", "revShimmer", LiftColors::lavender);
     mkKnob(revDamp, "DAMP", "revDamp", LiftColors::lavender);
     mkKnob(revMod, "MOD", "revMod", LiftColors::lavender);
 
-    // ---- Ducking ----
+    mkKnob(duckAmt, "AMT", "duckAmt", LiftColors::peach);
     mkCombo(duckRateBox, duckRateLabel, "RATE", "duckRate", FxChain::getDuckRateNames());
     mkKnob(duckShape, "SHAPE", "duckShape", LiftColors::peach);
 
-    // ---- FXカーブ ----
-    addAndMakeVisible(editor);
-    editor.setBipolar(false);
-    editor.setAccent(LiftColors::curveAccent(CurveStore::FxCurve));
-    editor.setTitle("FX ENV (0..1) x ENV knob -> slot Wet");
-    editor.setProgressProvider([this] { return proc.getUiProgress(); });
-    editor.onChanged = [this](const CurveSnapshot& s)
-    {
-        proc.getCurves().publish(CurveStore::FxCurve, s);
-    };
-    refresh();
+    setFx(0);
 }
 
-void FxPanel::refresh()
+// ==========================================================
+std::vector<juce::Component*> FxPanel::componentsFor(int fx)
 {
-    editor.setSnapshot(proc.getCurves().get(CurveStore::FxCurve));
+    switch (fx)
+    {
+    case 0: return { &satAmt.knob, &satAmt.label, &satAlgoBox, &satAlgoLabel,
+                     &satDrive.knob, &satDrive.label, &satPre.knob, &satPre.label,
+                     &satTrim.knob, &satTrim.label };
+    case 1: return { &choAmt.knob, &choAmt.label, &choRate.knob, &choRate.label,
+                     &choDepth.knob, &choDepth.label, &choWidth.knob, &choWidth.label };
+    case 2: return { &dlyAmt.knob, &dlyAmt.label, &dlyTimeBox, &dlyTimeLabel,
+                     &dlyFb.knob, &dlyFb.label, &dlyDuck.knob, &dlyDuck.label,
+                     &dlyDamp.knob, &dlyDamp.label };
+    case 3: return { &revAmt.knob, &revAmt.label, &revDecay.knob, &revDecay.label,
+                     &revShimmer.knob, &revShimmer.label, &revDamp.knob, &revDamp.label,
+                     &revMod.knob, &revMod.label };
+    default: return { &duckAmt.knob, &duckAmt.label, &duckRateBox, &duckRateLabel,
+                      &duckShape.knob, &duckShape.label };
+    }
 }
 
+void FxPanel::setFx(int idx)
+{
+    activeFx = juce::jlimit(0, 4, idx);
+
+    for (int f = 0; f < 5; ++f)
+        for (auto* c : componentsFor(f))
+            c->setVisible(f == activeFx);
+
+    const auto& d = defs()[(size_t)activeFx];
+    for (int i = 0; i < 3; ++i)
+    {
+        curveTabs[(size_t)i]->setVisible(i < d.numCurves);
+        if (i < d.numCurves)
+            curveTabs[(size_t)i]->setButtonText(juce::String("ENV: ") + d.curveNames[i]);
+    }
+
+    activeCurve = 0;
+    setCurve(0);
+    resized();
+}
+
+void FxPanel::setCurve(int idx)
+{
+    const auto& d = defs()[(size_t)activeFx];
+    activeCurve = juce::jlimit(0, d.numCurves - 1, idx);
+    const int ci = d.curveIdx[activeCurve];
+
+    editor.setSnapshot(proc.getCurves().get(ci));
+    editor.setAccent(LiftColors::curveAccent(ci));
+    editor.setTitle(CurveStore::name(ci));
+
+    for (int i = 0; i < 5; ++i)
+        styleTabButton(*fxTabs[(size_t)i], i == activeFx, LiftColors::accentFx);
+    for (int i = 0; i < 3; ++i)
+        styleTabButton(*curveTabs[(size_t)i], i == activeCurve, LiftColors::curveAccent(ci));
+}
+
+void FxPanel::styleTabButton(juce::TextButton& b, bool active, juce::Colour accent)
+{
+    b.setColour(juce::TextButton::buttonColourId,
+                active ? accent.withAlpha(0.22f) : LiftColors::knobTrack);
+    b.setColour(juce::TextButton::textColourOffId,
+                active ? LiftColors::text : LiftColors::textDim);
+    b.repaint();
+}
+
+// ==========================================================
 void FxPanel::mkKnob(Cell& c, const juce::String& text, const juce::String& paramId, juce::Colour accent)
 {
     c.knob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-    c.knob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 56, 13);
+    c.knob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 15);
     c.knob.setColour(juce::Slider::rotarySliderFillColourId, accent);
     addAndMakeVisible(c.knob);
 
     c.label.setText(text, juce::dontSendNotification);
-    c.label.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+    c.label.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
     c.label.setColour(juce::Label::textColourId, LiftColors::textDim);
     c.label.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(c.label);
@@ -106,7 +194,7 @@ void FxPanel::mkCombo(juce::ComboBox& box, juce::Label& label, const juce::Strin
     addAndMakeVisible(box);
 
     label.setText(text, juce::dontSendNotification);
-    label.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+    label.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
     label.setColour(juce::Label::textColourId, LiftColors::textDim);
     label.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(label);
@@ -117,26 +205,45 @@ void FxPanel::mkCombo(juce::ComboBox& box, juce::Label& label, const juce::Strin
 
 void FxPanel::layoutCell(juce::Rectangle<int> area, Cell& c)
 {
-    c.label.setBounds(area.removeFromTop(13));
-    c.knob.setBounds(area.reduced(2));
+    c.label.setBounds(area.removeFromTop(16));
+    c.knob.setBounds(area.reduced(3));
 }
 
+void FxPanel::layoutDetailGrid(juce::Rectangle<int> area, std::vector<Cell*> cells,
+                               juce::ComboBox* combo, juce::Label* comboLabel)
+{
+    if (combo != nullptr && comboLabel != nullptr)
+    {
+        auto row = area.removeFromTop(44);
+        comboLabel->setBounds(row.removeFromLeft(52));
+        combo->setBounds(row.removeFromTop(24));
+        area.removeFromTop(4);
+    }
+
+    const int cols = 2;
+    const int rows = ((int)cells.size() + cols - 1) / cols;
+    const int cw = area.getWidth() / cols;
+    const int ch = juce::jmin(104, area.getHeight() / juce::jmax(1, rows));
+
+    for (int i = 0; i < (int)cells.size(); ++i)
+    {
+        juce::Rectangle<int> cell(area.getX() + (i % cols) * cw,
+                                  area.getY() + (i / cols) * ch, cw, ch);
+        layoutCell(cell, *cells[(size_t)i]);
+    }
+}
+
+// ==========================================================
 void FxPanel::paint(juce::Graphics& g)
 {
     g.setColour(LiftColors::panel);
     g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(2.0f), 8.0f);
 
-    // 詳細グループ枠
-    g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
-    for (int i = 0; i < 6; ++i)
+    // 詳細エリアの枠
+    if (!detailArea.isEmpty())
     {
-        const auto r = groupRects[(size_t)i];
-        if (r.isEmpty()) continue;
         g.setColour(LiftColors::panelLine);
-        g.drawRoundedRectangle(r.toFloat(), 6.0f, 1.0f);
-        g.setColour(LiftColors::textDim);
-        g.drawText(groupName(i), r.getX() + 8, r.getY() + 3, r.getWidth() - 16, 12,
-                   juce::Justification::centredLeft);
+        g.drawRoundedRectangle(detailArea.toFloat(), 6.0f, 1.0f);
     }
 }
 
@@ -144,101 +251,54 @@ void FxPanel::resized()
 {
     auto r = getLocalBounds().reduced(12, 10);
 
-    // ---- 上段: 6スロット ----
-    auto slotsRow = r.removeFromTop(128);
-    const int slotW = slotsRow.getWidth() / FxChain::kNumSlots;
+    // ---- スロット行 ----
+    auto chainRow = r.removeFromTop(24);
+    chainLabel.setBounds(chainRow.removeFromLeft(60));
+    const int slotW = chainRow.getWidth() / FxChain::kNumSlots;
     for (int s = 0; s < FxChain::kNumSlots; ++s)
-    {
-        auto slot = slotsRow.removeFromLeft(slotW).reduced(4, 0);
-        slotLabel[(size_t)s].setBounds(slot.removeFromTop(14));
-        slotType[(size_t)s].setBounds(slot.removeFromTop(22));
-        slot.removeFromTop(2);
+        slotType[(size_t)s].setBounds(chainRow.removeFromLeft(slotW).reduced(3, 0));
 
-        const int half = slot.getWidth() / 2;
-        auto amtArea = slot.removeFromLeft(half);
-        layoutCell(amtArea, slotAmt[(size_t)s]);
-        layoutCell(slot, slotEnv[(size_t)s]);
+    r.removeFromTop(8);
+
+    // ---- FXサブタブ行 ----
+    auto tabRow = r.removeFromTop(28);
+    for (int i = 0; i < 5; ++i)
+    {
+        fxTabs[(size_t)i]->setBounds(tabRow.removeFromLeft(108));
+        tabRow.removeFromLeft(6);
     }
 
-    r.removeFromTop(10);
+    r.removeFromTop(8);
+    hint.setBounds(r.removeFromBottom(20));
+    r.removeFromBottom(4);
 
-    // ---- 右: FXカーブエディタ ----
-    auto curveArea = r.removeFromRight(370).reduced(4, 0);
-    editor.setBounds(curveArea);
-    r.removeFromRight(6);
+    // ---- 左: 詳細 / 右: カーブ ----
+    detailArea = r.removeFromLeft(300);
+    auto inner = detailArea.reduced(10, 8);
 
-    // ---- 左: 詳細グループ 3行x2列 ----
-    const int rows = 3, cols = 2;
-    const int gw = r.getWidth() / cols;
-    const int gh = r.getHeight() / rows;
-
-    for (int i = 0; i < 6; ++i)
+    switch (activeFx)
     {
-        juce::Rectangle<int> cell(r.getX() + (i % cols) * gw,
-                                  r.getY() + (i / cols) * gh, gw, gh);
-        cell = cell.reduced(3);
-        groupRects[(size_t)i] = cell;
-
-        auto inner = cell.reduced(8).withTrimmedTop(14);
-
-        switch (i)
-        {
-        case 0: // SATURATION
-        {
-            auto comboCol = inner.removeFromLeft(92);
-            satAlgoLabel.setBounds(comboCol.removeFromTop(13));
-            satAlgoBox.setBounds(comboCol.removeFromTop(22));
-            const int w = inner.getWidth() / 3;
-            layoutCell(inner.removeFromLeft(w), satDrive);
-            layoutCell(inner.removeFromLeft(w), satPre);
-            layoutCell(inner, satTrim);
-            break;
-        }
-        case 1: // CHORUS
-        {
-            const int w = inner.getWidth() / 3;
-            layoutCell(inner.removeFromLeft(w), choRate);
-            layoutCell(inner.removeFromLeft(w), choDepth);
-            layoutCell(inner, choWidth);
-            break;
-        }
-        case 2: // DELAY
-        {
-            auto comboCol = inner.removeFromLeft(78);
-            dlyTimeLabel.setBounds(comboCol.removeFromTop(13));
-            dlyTimeBox.setBounds(comboCol.removeFromTop(22));
-            const int w = inner.getWidth() / 3;
-            layoutCell(inner.removeFromLeft(w), dlyFb);
-            layoutCell(inner.removeFromLeft(w), dlyDuck);
-            layoutCell(inner, dlyDamp);
-            break;
-        }
-        case 3: // FREEZE
-        {
-            const int w = inner.getWidth() / 3;
-            layoutCell(inner.removeFromLeft(w), frzSize);
-            layoutCell(inner.removeFromLeft(w), frzFb);
-            layoutCell(inner, frzDamp);
-            break;
-        }
-        case 4: // REVERB
-        {
-            const int w = inner.getWidth() / 4;
-            layoutCell(inner.removeFromLeft(w), revDecay);
-            layoutCell(inner.removeFromLeft(w), revShimmer);
-            layoutCell(inner.removeFromLeft(w), revDamp);
-            layoutCell(inner, revMod);
-            break;
-        }
-        case 5: // DUCKING
-        {
-            auto comboCol = inner.removeFromLeft(92);
-            duckRateLabel.setBounds(comboCol.removeFromTop(13));
-            duckRateBox.setBounds(comboCol.removeFromTop(22));
-            layoutCell(inner.removeFromLeft(inner.getWidth() / 2), duckShape);
-            break;
-        }
-        default: break;
-        }
+    case 0: layoutDetailGrid(inner, { &satAmt, &satDrive, &satPre, &satTrim },
+                             &satAlgoBox, &satAlgoLabel); break;
+    case 1: layoutDetailGrid(inner, { &choAmt, &choRate, &choDepth, &choWidth },
+                             nullptr, nullptr); break;
+    case 2: layoutDetailGrid(inner, { &dlyAmt, &dlyFb, &dlyDuck, &dlyDamp },
+                             &dlyTimeBox, &dlyTimeLabel); break;
+    case 3: layoutDetailGrid(inner, { &revAmt, &revDecay, &revShimmer, &revDamp, &revMod },
+                             nullptr, nullptr); break;
+    default: layoutDetailGrid(inner, { &duckAmt, &duckShape },
+                              &duckRateBox, &duckRateLabel); break;
     }
+
+    r.removeFromLeft(8);
+
+    // カーブサブタブ + エディタ
+    auto curveTabRow = r.removeFromTop(24);
+    for (int i = 0; i < 3; ++i)
+    {
+        curveTabs[(size_t)i]->setBounds(curveTabRow.removeFromLeft(110));
+        curveTabRow.removeFromLeft(6);
+    }
+    r.removeFromTop(4);
+    editor.setBounds(r);
 }

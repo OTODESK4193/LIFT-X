@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.22)
 #    SPECTRA8 同様の標準モジュール構成 + ソースレベルの DSP/GUI 分離で
 #    同じ目的（テスト容易性・依存断絶）を達成する。
 # ============================================================================
-project(LIFTX VERSION 0.1.0 LANGUAGES C CXX)
+project(LIFTX VERSION 0.2.0 LANGUAGES C CXX)
 
 # ----------------------------------------------------------------------------
 #  C++20
@@ -39,7 +39,7 @@ juce_add_plugin(LIFTX
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     VST3_AUTO_MANIFEST       FALSE
     COPY_PLUGIN_AFTER_BUILD  TRUE
-    VERSION                  "0.1.0"
+    VERSION                  "0.2.0"
 )
 
 # ----------------------------------------------------------------------------
@@ -67,10 +67,13 @@ target_sources(LIFTX PRIVATE
     Source/GUI/GlowToggle.h
     Source/GUI/CurveEditor.h
     Source/GUI/CurveEditor.cpp
+    Source/GUI/WaveDisplay.h
+    Source/GUI/WavetableBrowser.h
+    Source/GUI/WavetableBrowser.cpp
     Source/GUI/MainPanel.h
     Source/GUI/MainPanel.cpp
-    Source/GUI/PitchPanel.h
-    Source/GUI/PitchPanel.cpp
+    Source/GUI/OscEnvPanel.h
+    Source/GUI/OscEnvPanel.cpp
     Source/GUI/FilterPanel.h
     Source/GUI/FilterPanel.cpp
     Source/GUI/FxPanel.h
@@ -119,7 +122,7 @@ target_compile_definitions(LIFTX PRIVATE
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
-    LIFTX_VERSION="0.1.0"
+    LIFTX_VERSION="0.2.0"
 )
 
 # ----------------------------------------------------------------------------
