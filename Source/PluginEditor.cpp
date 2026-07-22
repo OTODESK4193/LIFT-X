@@ -1,0 +1,103 @@
+// ==========================================
+// File: PluginEditor.cpp
+// ==========================================
+#include "PluginEditor.h"
+
+LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
+    : AudioProcessorEditor(&p), proc(p),
+      mainPanel(p), pitchPanel(p), filterPanel(p), fxPanel(p)
+{
+    setLookAndFeel(&lnf);
+
+    auto initTab = [this](juce::TextButton& b, Tab t)
+    {
+        b.onClick = [this, t] { setActiveTab(t); };
+        addAndMakeVisible(b);
+    };
+    initTab(mainTabButton, Tab::Main);
+    initTab(pitchTabButton, Tab::Pitch);
+    initTab(filterTabButton, Tab::Filter);
+    initTab(fxTabButton, Tab::Fx);
+
+    addChildComponent(mainPanel);
+    addChildComponent(pitchPanel);
+    addChildComponent(filterPanel);
+    addChildComponent(fxPanel);
+
+    setActiveTab(Tab::Main);
+    setSize(1020, 640);
+}
+
+LiftXAudioProcessorEditor::~LiftXAudioProcessorEditor()
+{
+    setLookAndFeel(nullptr);
+}
+
+void LiftXAudioProcessorEditor::setActiveTab(Tab t)
+{
+    activeTab = t;
+
+    mainPanel.setVisible(t == Tab::Main);
+    pitchPanel.setVisible(t == Tab::Pitch);
+    filterPanel.setVisible(t == Tab::Filter);
+    fxPanel.setVisible(t == Tab::Fx);
+
+    // カーブはCurveStoreが真実の源: タブ表示時に再読込 (ステート復元対応)
+    if (t == Tab::Pitch)  pitchPanel.refresh();
+    if (t == Tab::Filter) filterPanel.refresh();
+    if (t == Tab::Fx)     fxPanel.refresh();
+
+    styleTabButton(mainTabButton, t == Tab::Main);
+    styleTabButton(pitchTabButton, t == Tab::Pitch);
+    styleTabButton(filterTabButton, t == Tab::Filter);
+    styleTabButton(fxTabButton, t == Tab::Fx);
+}
+
+void LiftXAudioProcessorEditor::styleTabButton(juce::TextButton& b, bool active)
+{
+    b.setColour(juce::TextButton::buttonColourId,
+                active ? LiftColors::accentMaster.withAlpha(0.22f) : LiftColors::knobTrack);
+    b.setColour(juce::TextButton::textColourOffId,
+                active ? LiftColors::text : LiftColors::textDim);
+    b.repaint();
+}
+
+void LiftXAudioProcessorEditor::paint(juce::Graphics& g)
+{
+    g.fillAll(LiftColors::bg);
+
+    // ヘッダー
+    g.setColour(LiftColors::text);
+    g.setFont(juce::Font(juce::FontOptions(20.0f, juce::Font::bold)));
+    g.drawText("LIFT-X", 16, 8, 140, 28, juce::Justification::centredLeft);
+
+    g.setColour(LiftColors::textDim);
+    g.setFont(juce::Font(juce::FontOptions(10.5f)));
+    g.drawText("RISER SYNTH  v" LIFTX_VERSION "  -  OTODESK",
+               getWidth() - 260, 8, 244, 28, juce::Justification::centredRight);
+}
+
+void LiftXAudioProcessorEditor::resized()
+{
+    auto r = getLocalBounds();
+
+    // ヘッダー行: タイトル(左) + タブボタン(中央)
+    auto header = r.removeFromTop(44);
+    header.removeFromLeft(150);
+    header.removeFromRight(260);
+    header = header.withSizeKeepingCentre(4 * 96 + 3 * 8, 28);
+
+    juce::TextButton* tabs[4] = { &mainTabButton, &pitchTabButton, &filterTabButton, &fxTabButton };
+    for (auto* b : tabs)
+    {
+        b->setBounds(header.removeFromLeft(96));
+        header.removeFromLeft(8);
+    }
+
+    // パネル領域
+    const auto panelArea = r.reduced(8, 4);
+    mainPanel.setBounds(panelArea);
+    pitchPanel.setBounds(panelArea);
+    filterPanel.setBounds(panelArea);
+    fxPanel.setBounds(panelArea);
+}
