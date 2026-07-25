@@ -42,6 +42,7 @@ public:
     struct Params
     {
         float lift = 1.0f;
+        bool  liftAuto = false;   // true: LIFT=Progress連動 (ノブ値は無視)
 
         struct Osc
         {
@@ -99,7 +100,8 @@ public:
                 f.prepare(sampleRate);
         noiseFilter.prepare(sampleRate);
         noiseFilter.setType(TptSvf::BandPass);
-        smCoef = 1.0f - std::exp(-1.0f / (0.004f * (float)sr)); // τ≒4ms
+        smCoef = 1.0f - std::exp(-1.0f / (0.004f * (float)sr));      // τ≒4ms (サンプル単位平滑)
+        declickCoef = 1.0f - std::exp(-1.0f / (0.002f * (float)sr)); // τ≒2ms (リトリガーデクリック)
         hardReset();
     }
 
@@ -113,11 +115,18 @@ public:
         hostSync = false;
         ctrlCount = 0;
         snapNext = true;
+        declickGain = 1.0f;
+        liftSm = 1.0f;
         for (auto& po : phase) po.fill(0.0f);
         pitchSm.fill(60.0f);
         levelSm.fill(0.0f);
         pitchTarget.fill(60.0f);
         levelTarget.fill(0.0f);
+        posSm.fill(0.0f);
+        detSm.fill(12.0f);
+        sprSm.fill(0.7f);
+        resSm.fill(0.9f);
+        noiseResSm = 2.0f;
         for (auto& row : filters)
             for (auto& f : row)
                 f.reset();
@@ -130,6 +139,19 @@ public:
     // ---- MIDI ----
     void noteOn(int note, float velocity, double ppqNow, bool hostPlaying) noexcept
     {
+        // リトリガー時 (発音中の再ノートオン) は位相リセットの不連続を
+        // 2msのデクリックランプで隠す (ブチ切れ/クリック対策)
+        if (ampEnv > 0.02f)
+            declickGain = 0.0f;
+        else
+        {
+            // 完全な新規発音: フィルターの残留状態をクリア (前回の残響リング防止)
+            for (auto& row : filters)
+                for (auto& f : row)
+                    f.reset();
+            noiseFilter.reset();
+        }
+
         curNote = note;
         noteHeld = true;
         hostSync = hostPlaying;
@@ -231,8 +253,10 @@ public:
                 const int uni = juce::jlimit(1, kMaxUnison, po.unison);
                 const float norm = levelSm[(size_t)o] / std::sqrt((float)uni);
 
+                // POSITION はサンプル単位平滑 (ノブ操作時のジッパー防止)
+                posSm[(size_t)o] += smCoef * (po.pos - posSm[(size_t)o]);
                 const bool useCustom = (po.waveMode == CustomWT);
-                const float morph = useCustom ? po.pos : (float)po.waveMode * 0.25f;
+                const float morph = useCustom ? posSm[(size_t)o] : (float)po.waveMode * 0.25f;
 
                 float* ph = phase[(size_t)o].data();
                 const float* cf = centsFac[(size_t)o].data();
@@ -277,11 +301,12 @@ public:
                 r += nr;
             }
 
-            // ---- アンプエンベロープ ----
+            // ---- アンプエンベロープ + デクリック ----
             const float target = noteHeld ? 1.0f : 0.0f;
             ampEnv += (noteHeld ? attCoef : relCoef) * (target - ampEnv);
+            declickGain += declickCoef * (1.0f - declickGain);
 
-            const float g = ampEnv * velGain;
+            const float g = ampEnv * velGain * declickGain;
             outL[i] += l * g;
             outR[i] += r * g;
         }
@@ -294,7 +319,11 @@ private:
     void controlTick(const Params& p, const CurveStore& curves) noexcept
     {
         const float prog = (float)progress;
-        const float lift = juce::jlimit(0.0f, 1.0f, p.lift);
+
+        // LIFT: Auto時はProgress連動。ティックレートで平滑 (段差防止)
+        const float liftTarget = juce::jlimit(0.0f, 1.0f, p.liftAuto ? prog : p.lift);
+        liftSm += 0.3f * (liftTarget - liftSm);
+        const float lift = liftSm;
 
         // バイポーラ偏差 (-1..1, LIFTで縮小)
         auto bip = [lift, &curves, prog](int idx) noexcept
@@ -323,11 +352,15 @@ private:
             levelTarget[(size_t)o] = juce::jlimit(0.0f, 1.0f,
                 po.level + bip(CurveStore::oscCurve(o, 1)) * 0.5f);
 
-            // DETUNE: ±50ct / SPREAD: ±0.5 (ユニゾンテーブル再計算)
-            const float detEff = juce::jlimit(0.0f, 100.0f,
+            // DETUNE: ±50ct / SPREAD: ±0.5 (ティックレート平滑→ユニゾンテーブル再計算)
+            const float detTgt = juce::jlimit(0.0f, 100.0f,
                 po.detune + bip(CurveStore::oscCurve(o, 2)) * 50.0f);
-            const float sprEff = juce::jlimit(0.0f, 1.0f,
+            const float sprTgt = juce::jlimit(0.0f, 1.0f,
                 po.spread + bip(CurveStore::oscCurve(o, 3)) * 0.5f);
+            detSm[(size_t)o] += 0.35f * (detTgt - detSm[(size_t)o]);
+            sprSm[(size_t)o] += 0.35f * (sprTgt - sprSm[(size_t)o]);
+            const float detEff = detSm[(size_t)o];
+            const float sprEff = sprSm[(size_t)o];
 
             const int uniN = juce::jlimit(1, kMaxUnison, po.unison);
             for (int v = 0; v < kMaxUnison; ++v)
@@ -350,9 +383,10 @@ private:
             levelTarget[3] = juce::jlimit(0.0f, 1.0f,
                 p.noiseLevel + bip(CurveStore::NoiseLevel) * 0.5f);
 
-            const float resEff = juce::jlimit(0.5f, 12.0f,
+            const float resTgt = juce::jlimit(0.5f, 12.0f,
                 p.noiseRes + bip(CurveStore::NoiseRes) * 5.75f);
-            noiseFilter.setCoef(noiseCutSm, resEff);
+            noiseResSm += 0.35f * (resTgt - noiseResSm);
+            noiseFilter.setCoef(noiseCutSm, noiseResSm);
         }
 
         // フィルター: バイポーラ ±5oct × ENV AMT
@@ -362,11 +396,12 @@ private:
             const float target = p.flt[(size_t)j].cutoff
                 * std::exp2(p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j) * 5.0f);
             cutSm[(size_t)j] += 0.5f * (target - cutSm[(size_t)j]);
+            resSm[(size_t)j] += 0.35f * (p.flt[(size_t)j].res - resSm[(size_t)j]);
 
             for (int s = 0; s < kNumSources; ++s)
             {
                 filters[(size_t)j][(size_t)s].setType(p.flt[(size_t)j].type);
-                filters[(size_t)j][(size_t)s].setCoef(cutSm[(size_t)j], p.flt[(size_t)j].res);
+                filters[(size_t)j][(size_t)s].setCoef(cutSm[(size_t)j], resSm[(size_t)j]);
             }
         }
 
@@ -376,6 +411,8 @@ private:
             snapNext = false;
             pitchSm = pitchTarget;
             levelSm = levelTarget;
+            for (int o = 0; o < kNumOscs; ++o)
+                posSm[(size_t)o] = p.osc[(size_t)o].pos;
         }
     }
 
@@ -437,14 +474,22 @@ private:
     std::array<float, kNumOscs> pitchSm {};
     std::array<float, kNumSources> levelTarget {};
     std::array<float, kNumSources> levelSm {};
+    std::array<float, kNumOscs> posSm {};
+    std::array<float, kNumOscs> detSm {};
+    std::array<float, kNumOscs> sprSm {};
     float smCoef = 0.01f;
+    float declickCoef = 0.02f;
+    float declickGain = 1.0f;
+    float liftSm = 1.0f;
 
     // [フィルター][ソース] = 16基 (ソース別ルーティング用)
     std::array<std::array<TptSvf, kNumSources>, kNumFilters> filters;
     std::array<float, kNumFilters> cutSm { 1000.0f, 1000.0f, 1000.0f, 1000.0f };
+    std::array<float, kNumFilters> resSm { 0.9f, 0.9f, 0.9f, 0.9f };
 
     TptSvf noiseFilter;
     float noiseCutSm = 500.0f;
+    float noiseResSm = 2.0f;
 
     juce::uint32 rngState = 0x9e3779b9;
     std::array<float, 7> pinkB {};

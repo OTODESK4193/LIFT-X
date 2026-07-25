@@ -19,6 +19,11 @@ LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
     initTab(filterTabButton, Tab::Filter);
     initTab(fxTabButton, Tab::Fx);
 
+    // LIFT: MANUAL/AUTO トグル (MAINタブの左)
+    addAndMakeVisible(liftModeButton);
+    liftModeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        proc.apvts, "liftMode", liftModeButton);
+
     addChildComponent(mainPanel);
     addChildComponent(oscEnvPanel);
     addChildComponent(filterPanel);
@@ -81,11 +86,14 @@ void LiftXAudioProcessorEditor::resized()
 {
     auto r = getLocalBounds();
 
-    // ヘッダー行: タイトル(左) + タブボタン(中央)
+    // ヘッダー行: タイトル(左) + LIFT MANUAL/AUTO + タブボタン(中央)
     auto header = r.removeFromTop(44);
     header.removeFromLeft(150);
     header.removeFromRight(260);
-    header = header.withSizeKeepingCentre(4 * 96 + 3 * 8, 28);
+    header = header.withSizeKeepingCentre(112 + 12 + 4 * 96 + 3 * 8, 28);
+
+    liftModeButton.setBounds(header.removeFromLeft(112));
+    header.removeFromLeft(12);
 
     juce::TextButton* tabs[4] = { &mainTabButton, &oscEnvTabButton, &filterTabButton, &fxTabButton };
     for (auto* b : tabs)

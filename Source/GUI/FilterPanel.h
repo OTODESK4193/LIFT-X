@@ -12,9 +12,11 @@
 #include "CurveEditor.h"
 #include "ValueKnob.h"
 #include "GlowToggle.h"
+#include "ModBand.h"
 #include "ColorPalette.h"
 
-class FilterPanel : public juce::Component
+class FilterPanel : public juce::Component,
+                    private juce::Timer
 {
 public:
     explicit FilterPanel(LiftXAudioProcessor& p);
@@ -25,6 +27,7 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
     void setSub(int idx);
     void styleTabButton(juce::TextButton& b, bool active);
 

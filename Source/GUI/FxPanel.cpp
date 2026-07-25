@@ -100,6 +100,50 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     mkKnob(duckShape, "SHAPE", "duckShape", LiftColors::peach);
 
     setFx(0);
+    startTimerHz(30);
+}
+
+// マルチENV変化幅を表示中FXのノブへ動的表示 (バイポーラ加算式と同一規則)
+void FxPanel::timerCallback()
+{
+    if (!isVisible()) return;
+
+    const float prog = proc.getUiProgress();
+    const bool autoMode = proc.apvts.getRawParameterValue("liftMode")->load() > 0.5f;
+    const float lift = juce::jlimit(0.0f, 1.0f,
+        autoMode ? prog : proc.apvts.getRawParameterValue("lift")->load());
+
+    const auto& curves = proc.getCurves();
+    auto upd = [&](Cell& c, const char* paramId, int curveIdx, float halfRange)
+    {
+        ModBand::update(c.knob, proc.apvts.getParameter(paramId),
+                        curves.read(curveIdx), lift, prog,
+                        [halfRange](float b, float bip) { return b + bip * halfRange; });
+    };
+
+    switch (activeFx)
+    {
+    case 0:
+        upd(satAmt, "satAmt", CurveStore::SatAmt, 0.5f);
+        upd(satDrive, "satDrive", CurveStore::SatDrive, 5.5f);
+        break;
+    case 1:
+        upd(choAmt, "choAmt", CurveStore::ChoAmt, 0.5f);
+        upd(choDepth, "choDepth", CurveStore::ChoDepth, 0.5f);
+        break;
+    case 2:
+        upd(dlyAmt, "dlyAmt", CurveStore::DlyAmt, 0.5f);
+        upd(dlyFb, "dlyFb", CurveStore::DlyFb, 0.475f);
+        break;
+    case 3:
+        upd(revAmt, "revAmt", CurveStore::RevAmt, 0.5f);
+        upd(revShimmer, "revShimmer", CurveStore::RevShimmer, 0.5f);
+        break;
+    default:
+        upd(duckAmt, "duckAmt", CurveStore::DuckAmt, 0.5f);
+        upd(duckShape, "duckShape", CurveStore::DuckShape, 3.75f);
+        break;
+    }
 }
 
 // ==========================================================

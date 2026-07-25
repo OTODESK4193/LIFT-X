@@ -16,9 +16,11 @@
 #include "../PluginProcessor.h"
 #include "CurveEditor.h"
 #include "ValueKnob.h"
+#include "ModBand.h"
 #include "ColorPalette.h"
 
-class FxPanel : public juce::Component
+class FxPanel : public juce::Component,
+                private juce::Timer
 {
 public:
     explicit FxPanel(LiftXAudioProcessor& p);
@@ -44,6 +46,7 @@ private:
     };
     static const std::array<FxDef, 5>& defs();
 
+    void timerCallback() override;
     void mkKnob(Cell& c, const juce::String& text, const juce::String& paramId, juce::Colour accent);
     void mkCombo(juce::ComboBox& box, juce::Label& label, const juce::String& text,
                  const juce::String& paramId, const juce::StringArray& items);

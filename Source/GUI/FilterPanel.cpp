@@ -73,6 +73,26 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     addAndMakeVisible(hint);
 
     setSub(0);
+    startTimerHz(30);
+}
+
+// マルチENV変化幅をCUTOFFノブへ動的表示 (±5oct × ENV AMT)
+void FilterPanel::timerCallback()
+{
+    if (!isVisible()) return;
+
+    const juce::String n(activeSub + 1);
+    auto* prm = proc.apvts.getParameter("flt" + n + "Cutoff");
+    const float envAmt = proc.apvts.getRawParameterValue("flt" + n + "Env")->load();
+
+    const float prog = proc.getUiProgress();
+    const bool autoMode = proc.apvts.getRawParameterValue("liftMode")->load() > 0.5f;
+    const float lift = juce::jlimit(0.0f, 1.0f,
+        autoMode ? prog : proc.apvts.getRawParameterValue("lift")->load());
+
+    ModBand::update(cutoffKnob, prm,
+                    proc.getCurves().read(CurveStore::Filter1 + activeSub), lift, prog,
+                    [envAmt](float b, float bip) { return b * std::exp2(envAmt * bip * 5.0f); });
 }
 
 void FilterPanel::setSub(int idx)

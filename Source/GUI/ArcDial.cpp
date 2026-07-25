@@ -43,6 +43,30 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     g.setColour(LiftColors::knobTrack);
     g.drawEllipse(rx, ry, rw, rw, arcThickness);
 
+    const auto baseColourEarly = slider.findColour(juce::Slider::rotarySliderFillColourId);
+
+    // 1.5 マルチENVの変調レンジ帯 (Granular ModMatrix方式)
+    //     GUI側が mod_active / mod_min / mod_max / mod_live を毎フレーム更新する。
+    //     帯はアーク色より濃い色で描画し、視認性を確保する。
+    const auto& props = slider.getProperties();
+    const bool modActive = props.getWithDefault("mod_active", false);
+    if (modActive)
+    {
+        const float mMin = juce::jlimit(0.0f, 1.0f, (float)props.getWithDefault("mod_min", 0.0f));
+        const float mMax = juce::jlimit(0.0f, 1.0f, (float)props.getWithDefault("mod_max", 1.0f));
+        const auto aLo = rotaryStartAngle + juce::jmin(mMin, mMax) * (rotaryEndAngle - rotaryStartAngle);
+        const auto aHi = rotaryStartAngle + juce::jmax(mMin, mMax) * (rotaryEndAngle - rotaryStartAngle);
+
+        if (std::abs(aHi - aLo) > 0.001f)
+        {
+            juce::Path band;
+            band.addArc(rx, ry, rw, rw, aLo, aHi, true);
+            g.setColour(baseColourEarly.darker(0.55f).withMultipliedSaturation(1.4f));
+            g.strokePath(band, juce::PathStrokeType(arcThickness + 4.0f,
+                         juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+    }
+
     // 2. 値アーク (セクション色のグラデーション)
     juce::Path p;
     p.addArc(rx, ry, rw, rw, rotaryStartAngle, angle, true);
@@ -66,4 +90,17 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     p2.applyTransform(juce::AffineTransform::rotation(angle).translated(centreX, centreY));
     g.setColour(LiftColors::text);
     g.fillPath(p2);
+
+    // 5. ライブ変調ドット (変調適用後の現在値をアーク上に表示)
+    if (modActive)
+    {
+        const float live = juce::jlimit(0.0f, 1.0f, (float)props.getWithDefault("mod_live", sliderPos));
+        const auto aLive = rotaryStartAngle + live * (rotaryEndAngle - rotaryStartAngle);
+        const float dotX = centreX + std::sin(aLive) * radius;
+        const float dotY = centreY - std::cos(aLive) * radius;
+        g.setColour(juce::Colours::white.withAlpha(0.30f));
+        g.fillEllipse(dotX - 5.0f, dotY - 5.0f, 10.0f, 10.0f);
+        g.setColour(juce::Colours::white);
+        g.fillEllipse(dotX - 2.6f, dotY - 2.6f, 5.2f, 5.2f);
+    }
 }

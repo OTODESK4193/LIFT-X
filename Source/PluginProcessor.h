@@ -60,6 +60,16 @@ public:
     int getNoteEventCount() const noexcept { return mNoteEvents.load(std::memory_order_relaxed); }
     int getLastNote() const noexcept { return mLastNote.load(std::memory_order_relaxed); }
 
+    // ---- ライザー出力キャプチャ (波形表示 + WAV D&D用) ----
+    //  ノートオンで録音開始、リリース完了+テール1.5秒で確定。
+    //  GUIはバージョン増加を検知してコピーを取る (書き込み中の参照は表示専用)。
+    const float* getCaptureL() const noexcept { return mCapL.data(); }
+    const float* getCaptureR() const noexcept { return mCapR.data(); }
+    int getCaptureLength() const noexcept { return mCapLenPub.load(std::memory_order_relaxed); }
+    int getCaptureVersion() const noexcept { return mCapVersion.load(std::memory_order_relaxed); }
+    bool isCapturing() const noexcept { return mCapActive.load(std::memory_order_relaxed); }
+    double getPreparedSampleRate() const noexcept { return mPreparedSampleRate; }
+
     // ---- カスタムWavetable (OSC毎 / メッセージスレッド専用) ----
     bool loadCustomWavetable(int oscIdx, const juce::File& file);
     void clearCustomWavetable(int oscIdx);
@@ -117,8 +127,20 @@ private:
     std::atomic<int> mLastNote { -1 };
     std::atomic<int> mNoteEvents { 0 };
 
+    // ---- ライザー出力キャプチャ (prepareToPlayで事前確保・最大30秒) ----
+    static constexpr double kMaxCaptureSeconds = 30.0;
+    std::vector<float> mCapL, mCapR;
+    int mCapWrite = 0;
+    bool mCapturing = false;
+    bool mWasActive = false;
+    int mTailRemain = -1;
+    std::atomic<int> mCapLenPub { 0 };
+    std::atomic<int> mCapVersion { 0 };
+    std::atomic<bool> mCapActive { false };
+
     // ---- キャッシュ済みパラメーターポインタ ----
     std::atomic<float>* pLift = nullptr;
+    std::atomic<float>* pLiftMode = nullptr;   // 0=Manual 1=Auto(Progress連動)
     std::atomic<float>* pBars = nullptr;
     std::atomic<float>* pAttack = nullptr;
     std::atomic<float>* pRelease = nullptr;

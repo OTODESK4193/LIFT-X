@@ -4,6 +4,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#include <cstring>
+
 // ---- グローバル設定ファイル (SPECTRA8方式) ----
 namespace
 {
@@ -105,6 +107,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
     // ---- グローバル ----
     add(std::make_unique<FloatP>(juce::ParameterID{"lift", 1}, "LIFT",
         juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f, attr(pctStr)));
+    add(std::make_unique<BoolP>(juce::ParameterID{"liftMode", 1}, "LIFT Auto", false));
     add(std::make_unique<ChoiceP>(juce::ParameterID{"bars", 1}, "Bars",
         juce::StringArray{"1", "2", "4", "8", "16"}, 2));
     add(std::make_unique<FloatP>(juce::ParameterID{"attack", 1}, "Attack",
@@ -237,6 +240,7 @@ void LiftXAudioProcessor::cacheParameterPointers()
     auto p = [this](const juce::String& id) { return apvts.getRawParameterValue(id); };
 
     pLift = p("lift");
+    pLiftMode = p("liftMode");
     pBars = p("bars");
     pAttack = p("attack");
     pRelease = p("release");
@@ -298,6 +302,18 @@ void LiftXAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     mScratchR.assign((size_t)mPreparedBlockSize, 0.0f);
 
+    // キャプチャバッファ (最大30秒・ステレオ)
+    const size_t capSize = (size_t)(sampleRate * kMaxCaptureSeconds);
+    mCapL.assign(capSize, 0.0f);
+    mCapR.assign(capSize, 0.0f);
+    mCapWrite = 0;
+    mCapturing = false;
+    mWasActive = false;
+    mTailRemain = -1;
+    mCapLenPub.store(0);
+    mCapVersion.fetch_add(1);
+    mCapActive.store(false);
+
     mMasterSm.reset(sampleRate, 0.02);
     mMasterSm.setCurrentAndTargetValue(
         juce::Decibels::decibelsToGain(pMaster != nullptr ? pMaster->load() : 0.0f));
@@ -353,12 +369,14 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     }
 
     // ---- MIDI ----
+    bool noteOnThisBlock = false;
     const double qnPerSample = (bpm / 60.0) / mPreparedSampleRate;
     for (const auto meta : midi)
     {
         const auto msg = meta.getMessage();
         if (msg.isNoteOn())
         {
+            noteOnThisBlock = true;
             const double ppqAtEvent = hasPpq && playing
                 ? ppq + (double)meta.samplePosition * qnPerSample : ppq;
             mEngine.noteOn(msg.getNoteNumber(), msg.getFloatVelocity(), ppqAtEvent, playing && hasPpq);
@@ -415,6 +433,56 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         }
     }
     mMasterSm.skip(numSamples);
+
+    // ---- ライザー出力キャプチャ (プラグイン最終出力 / RT安全: memcpyのみ) ----
+    {
+        const bool act = mEngine.isNoteActive();
+
+        if (noteOnThisBlock)
+        {
+            // 新しいライザー開始 → 録音をやり直す
+            mCapWrite = 0;
+            mCapturing = true;
+            mTailRemain = -1;
+            mCapActive.store(true, std::memory_order_relaxed);
+        }
+
+        if (mCapturing)
+        {
+            const int cap = (int)mCapL.size();
+            const int nWrite = juce::jmin(numSamples, cap - mCapWrite);
+            if (nWrite > 0)
+            {
+                const float* sl = buffer.getReadPointer(0);
+                const float* sr2 = buffer.getNumChannels() > 1 ? buffer.getReadPointer(1) : sl;
+                std::memcpy(mCapL.data() + mCapWrite, sl, (size_t)nWrite * sizeof(float));
+                std::memcpy(mCapR.data() + mCapWrite, sr2, (size_t)nWrite * sizeof(float));
+                mCapWrite += nWrite;
+            }
+            mCapLenPub.store(mCapWrite, std::memory_order_relaxed);
+
+            // リリース完了後はFXテールを1.5秒だけ録ってから確定
+            if (!act)
+            {
+                if (mTailRemain < 0)
+                    mTailRemain = (int)(mPreparedSampleRate * 1.5);
+                mTailRemain -= numSamples;
+            }
+            else
+            {
+                mTailRemain = -1;
+            }
+
+            if ((!act && mTailRemain <= 0) || mCapWrite >= cap)
+            {
+                mCapturing = false;
+                mCapActive.store(false, std::memory_order_relaxed);
+                mCapVersion.fetch_add(1, std::memory_order_release);
+            }
+        }
+
+        mWasActive = act;
+    }
 }
 
 // ==========================================================
@@ -423,6 +491,7 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noexcept
 {
     ep.lift = pLift->load();
+    ep.liftAuto = pLiftMode->load() > 0.5f;
     ep.attackMs = pAttack->load();
     ep.releaseMs = pRelease->load();
 
@@ -476,8 +545,10 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
         fp.type[(size_t)s] = (int)pFxType[(size_t)s]->load();
 
     // マルチENVカーブによるバイポーラ加算変調 (中央=ノブ値, ±レンジ半分)
+    //  LIFT Auto時はProgress自体がLIFTになる (エンジンと同一規則)
     const float prog = mEngine.getProgressF();
-    const float lift = juce::jlimit(0.0f, 1.0f, pLift->load());
+    const bool liftAuto = pLiftMode->load() > 0.5f;
+    const float lift = juce::jlimit(0.0f, 1.0f, liftAuto ? prog : pLift->load());
     auto bip = [this, prog, lift](int idx) noexcept
     {
         const float y = mCurves.read(idx).evaluate(prog);

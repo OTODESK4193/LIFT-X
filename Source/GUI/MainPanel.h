@@ -18,6 +18,8 @@
 #include "GlowToggle.h"
 #include "WaveDisplay.h"
 #include "WavetableBrowser.h"
+#include "RiserWaveStrip.h"
+#include "ModBand.h"
 #include "ColorPalette.h"
 
 class MainPanel : public juce::Component,
@@ -79,6 +81,7 @@ private:
     };
 
     void timerCallback() override;
+    void updateModBands(float lift, float prog);
     void setupKnob(KnobCell& c, const juce::String& text, const juce::String& paramId,
                    juce::Colour accent);
     void setupCombo(juce::ComboBox& box, const juce::String& paramId,
@@ -95,6 +98,13 @@ private:
     juce::ComboBox barsBox;
     juce::Label barsLabel;
     ProgressStrip progressStrip;
+    RiserWaveStrip waveStrip;
+
+    // ModBand用パラメーターキャッシュ
+    std::array<juce::RangedAudioParameter*, 3> prmOscLevel {}, prmOscDet {}, prmOscSpread {};
+    juce::RangedAudioParameter* prmNoiseLevel = nullptr;
+    juce::RangedAudioParameter* prmNoiseRes = nullptr;
+    juce::RangedAudioParameter* prmNoisePitch = nullptr;
 
     // ---- オシレーター 1-3 ----
     std::array<std::unique_ptr<GlowToggle>, 3> oscOn, oscSolo, oscMute;

@@ -2,6 +2,44 @@
 
 ライザー専用MIDIシンセサイザー。JUCE 8.0系 / VST3 + Standalone。v0.2。
 
+## v0.2.1 追加機能
+
+- **LIFT MANUAL/AUTO** — ヘッダー(MAINタブ左)のトグル。押すたびに表示が
+  「LIFT: MANUAL」⇔「LIFT: AUTO」に切り替わる。AUTO時はLIFTノブがProgressに
+  連動して動的に動く (ノブは操作不可)。MANUAL時はDAWオートメーション可能。
+- **ENV変化幅のノブ表示** — マルチENVが掛かるノブに、アーク色より濃い帯で
+  変調範囲を表示し、白ドットで変調適用後の現在値を表示 (Granular ModMatrix方式)。
+  対象: OSCのLEVEL/DETUNE/SPREAD、ノイズのLEVEL/PITCH/RES、FILTERのCUTOFF、
+  FXのAMT/DRIVE/DEPTH/FB/SHIMMER/SHAPE (PitchENVは対応ノブなしのため対象外)。
+- **ライザー波形表示 + WAV書き出し** — Progressバー下に録音波形を表示。
+  ノートオンで録音開始(REC表示)、リリース+テール1.5秒で確定。ストリップを
+  DAWへドラッグすると 32bit float WAV (セッションSR、最大30秒) としてドロップできる。
+- **ブチ切れ/ノイズ対策** — 新規発音時のフィルター残留状態クリア、
+  リトリガー時の2msデクリックランプ、アタック/リリース指数エンベロープ、
+  ノートオン直後の平滑スナップ (古い値からのグライド防止)。
+
+## スムージング一覧 (全ノブ精査済み)
+
+| パラメーター | 平滑方式 |
+|---|---|
+| OSCピッチ (Key/COARSE/カーブ) | サンプル単位一次平滑 τ≒4ms |
+| OSC LEVEL / ノイズLEVEL | サンプル単位 τ≒4ms |
+| WT POSITION | サンプル単位 τ≒4ms |
+| DETUNE / SPREAD | ティックレート(0.7ms毎)一次平滑 |
+| LIFT (Manual/Auto両方) | ティックレート一次平滑 |
+| FILTER CUTOFFカーブ | ティックレート平滑 + ZDF/TPT (高速スイープ安定) |
+| FILTER RES / ノイズRES | ティックレート一次平滑 |
+| Sat AMT/DRIVE, Cho AMT/DEPTH, Rev SHIMMER, Duck AMT/SHAPE | サンプル単位 τ≒10ms (FxChain内) |
+| Delay AMT/FB | サンプル単位 τ≒15ms (FX内部) |
+| Delay TIME | サンプル単位 τ≒20ms (テープ式リピッチ) |
+| Reverb Wet | FX内部平滑 (蓄積解放バースト防止) |
+| Ducking ゲイン | 非対称平滑 (dip 2ms / 復帰 12ms) + PPQ位相同期 |
+| MASTER | LinearSmoothedValue 20ms |
+| アンプ | 指数A/R + リトリガーデクリック2ms |
+
+(ATTACK/RELEASE/UNISON/WAVE種別/Key値は係数・離散値のため平滑対象外。
+WAVE種別の切替は発音中に行うと波形が瞬時に変わります)
+
 ## コンセプト
 
 MIDIノートオンをトリガーに、DAWのPPQ(トランスポート)へ同期して

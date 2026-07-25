@@ -4,7 +4,7 @@
 #include "MainPanel.h"
 
 MainPanel::MainPanel(LiftXAudioProcessor& p)
-    : proc(p), progressStrip(p), browser(p)
+    : proc(p), progressStrip(p), waveStrip(p), browser(p)
 {
     // ---- グローバル ----
     setupKnob(liftCell, "LIFT", "lift", LiftColors::accentMaster);
@@ -20,6 +20,7 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     setupCombo(barsBox, "bars", { "1", "2", "4", "8", "16" });
 
     addAndMakeVisible(progressStrip);
+    addAndMakeVisible(waveStrip);
 
     // ---- オシレーター ----
     for (int i = 0; i < 3; ++i)
@@ -108,16 +109,49 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
             refreshWaveDisplay(i);
     };
 
+    // ModBand用パラメーターキャッシュ
+    for (int i = 0; i < 3; ++i)
+    {
+        const juce::String n(i + 1);
+        prmOscLevel[(size_t)i] = proc.apvts.getParameter("osc" + n + "Level");
+        prmOscDet[(size_t)i] = proc.apvts.getParameter("osc" + n + "Det");
+        prmOscSpread[(size_t)i] = proc.apvts.getParameter("osc" + n + "Spread");
+    }
+    prmNoiseLevel = proc.apvts.getParameter("noiseLevel");
+    prmNoiseRes = proc.apvts.getParameter("noiseRes");
+    prmNoisePitch = proc.apvts.getParameter("noisePitch");
+
     refreshKeyButtons();
     for (int i = 0; i < 3; ++i)
         refreshWaveDisplay(i);
 
-    startTimerHz(10);
+    startTimerHz(30);
 }
 
 // ==========================================================
 void MainPanel::timerCallback()
 {
+    // ---- LIFT Auto: ノブをProgressへ追従 ----
+    const float prog = proc.getUiProgress();
+    const bool autoMode = proc.apvts.getRawParameterValue("liftMode")->load() > 0.5f;
+    if (autoMode)
+    {
+        if (liftCell.knob.isEnabled())
+            liftCell.knob.setEnabled(false);
+        liftCell.knob.setValue(prog, juce::dontSendNotification);
+    }
+    else if (!liftCell.knob.isEnabled())
+    {
+        liftCell.knob.setEnabled(true);
+        liftCell.knob.setValue(proc.apvts.getRawParameterValue("lift")->load(),
+                               juce::dontSendNotification);
+    }
+
+    // ---- マルチENV変化幅のノブ表示 ----
+    const float lift = juce::jlimit(0.0f, 1.0f,
+        autoMode ? prog : proc.apvts.getRawParameterValue("lift")->load());
+    updateModBands(lift, prog);
+
     // ---- MIDIラーン ----
     const int events = proc.getNoteEventCount();
     if (armedParamId.isNotEmpty() && events != lastNoteEvents)
@@ -153,6 +187,36 @@ void MainPanel::timerCallback()
     // キー表示は毎回更新 (オートメーション等の外部変更対応, 低コスト)
     if (armedParamId.isEmpty())
         refreshKeyButtons();
+}
+
+void MainPanel::updateModBands(float lift, float prog)
+{
+    const auto& curves = proc.getCurves();
+
+    for (int i = 0; i < 3; ++i)
+    {
+        ModBand::update(oscLevel[(size_t)i].knob, prmOscLevel[(size_t)i],
+                        curves.read(CurveStore::oscCurve(i, 1)), lift, prog,
+                        [](float b, float bip) { return b + bip * 0.5f; });
+        ModBand::update(oscDet[(size_t)i].knob, prmOscDet[(size_t)i],
+                        curves.read(CurveStore::oscCurve(i, 2)), lift, prog,
+                        [](float b, float bip) { return b + bip * 50.0f; });
+        ModBand::update(oscSpread[(size_t)i].knob, prmOscSpread[(size_t)i],
+                        curves.read(CurveStore::oscCurve(i, 3)), lift, prog,
+                        [](float b, float bip) { return b + bip * 0.5f; });
+    }
+
+    ModBand::update(noiseLevel.knob, prmNoiseLevel,
+                    curves.read(CurveStore::NoiseLevel), lift, prog,
+                    [](float b, float bip) { return b + bip * 0.5f; });
+    ModBand::update(noiseRes.knob, prmNoiseRes,
+                    curves.read(CurveStore::NoiseRes), lift, prog,
+                    [](float b, float bip) { return b + bip * 5.75f; });
+
+    const float rangeOct = proc.apvts.getRawParameterValue("noiseRange")->load();
+    ModBand::update(noisePitch.knob, prmNoisePitch,
+                    curves.read(CurveStore::NoisePitch), lift, prog,
+                    [rangeOct](float b, float bip) { return b * std::exp2(bip * rangeOct); });
 }
 
 void MainPanel::refreshWaveDisplay(int osc)
@@ -288,8 +352,10 @@ void MainPanel::resized()
     }
 
     auto right = top.reduced(8, 0);
-    right.removeFromTop(18);
-    progressStrip.setBounds(right.removeFromTop(36));
+    right.removeFromTop(14);
+    progressStrip.setBounds(right.removeFromTop(32));
+    right.removeFromTop(6);
+    waveStrip.setBounds(right); // Progress下: ライザー波形 + WAVドラッグ
 
     // ---- 下段: OSC1-3 + NOISE の4列 ----
     r.removeFromTop(8);

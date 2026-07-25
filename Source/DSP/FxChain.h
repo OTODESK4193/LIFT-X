@@ -829,6 +829,16 @@ public:
         ducker.prepareToPlay(sr);
         dcCoef = std::exp((float)(-1.0 / (0.004523 * sr)));
         for (int ch = 0; ch < 2; ++ch) { satState[ch].reset(); dcState[ch] = 0.0f; }
+
+        // カーブ変調されるパラメーターのサンプル単位平滑 (τ≒10ms)
+        //  ブロックレート更新による段差 (ジッパーノイズ) を除去する。
+        //  ※ Delayのamt/fb/time、ReverbのcurAmount、DuckerのgainSm は各FX内部で平滑済み。
+        modSmCoef = 1.0f - std::exp((float)(-1.0 / (0.010 * sr)));
+        satAmtSm = satDriveSm = 0.0f;
+        choAmtSm = choDepthSm = 0.0f;
+        revShimSm = 0.0f;
+        duckAmtSm = duckShapeSm = 0.0f;
+        modSmInit = false;
     }
 
     void process(juce::AudioBuffer<float>& buf, const Params& p) noexcept
@@ -866,8 +876,27 @@ public:
             return s * (t + (1.0f - t * 0.25f) * std::tanh((a - t) * 2.0f));
         };
 
+        // 平滑の初期化 (最初のブロックはターゲットへスナップ)
+        if (!modSmInit)
+        {
+            modSmInit = true;
+            satAmtSm = p.satAmt;   satDriveSm = p.satDrive;
+            choAmtSm = p.choAmt;   choDepthSm = p.choDepth;
+            revShimSm = p.revShimmer;
+            duckAmtSm = p.duckAmt; duckShapeSm = p.duckShape;
+        }
+
         for (int i = 0; i < numSamples; ++i)
         {
+            // カーブ変調パラメーターのサンプル単位平滑
+            satAmtSm    += modSmCoef * (p.satAmt - satAmtSm);
+            satDriveSm  += modSmCoef * (p.satDrive - satDriveSm);
+            choAmtSm    += modSmCoef * (p.choAmt - choAmtSm);
+            choDepthSm  += modSmCoef * (p.choDepth - choDepthSm);
+            revShimSm   += modSmCoef * (p.revShimmer - revShimSm);
+            duckAmtSm   += modSmCoef * (p.duckAmt - duckAmtSm);
+            duckShapeSm += modSmCoef * (p.duckShape - duckShapeSm);
+
             float l = dL[i];
             float r = dR[i];
 
@@ -876,20 +905,20 @@ public:
                 switch (p.type[(size_t)s])
                 {
                 case Saturation:
-                    if (p.satAmt > 0.0005f)
-                        saturate(l, r, p.satAmt, satType, p.satDrive, preAlpha, trimGain);
+                    if (satAmtSm > 0.0005f)
+                        saturate(l, r, satAmtSm, satType, satDriveSm, preAlpha, trimGain);
                     break;
                 case Chorus:
-                    chorus.process(l, r, p.choAmt, p.choRate, p.choDepth, p.choWidth);
+                    chorus.process(l, r, choAmtSm, p.choRate, choDepthSm, p.choWidth);
                     break;
                 case Delay:
                     delay.process(l, r, p.dlyAmt, p.bpm, p.dlyBeats, p.dlyFeedback, p.dlyDuck, p.dlyDamp);
                     break;
                 case Reverb:
-                    reverb.process(l, r, p.revAmt, p.revDecay, p.revShimmer, p.revDamp, p.revMod);
+                    reverb.process(l, r, p.revAmt, p.revDecay, revShimSm, p.revDamp, p.revMod);
                     break;
                 case Ducking:
-                    ducker.process(l, r, p.duckAmt, p.bpm, p.duckBeats, p.duckShape);
+                    ducker.process(l, r, duckAmtSm, p.bpm, p.duckBeats, duckShapeSm);
                     break;
                 default: break;
                 }
@@ -941,6 +970,14 @@ private:
     float preX1[2] = { 0.0f, 0.0f };
     float preY1[2] = { 0.0f, 0.0f };
     float dcCoef = 0.995f;
+
+    // カーブ変調パラメーターのサンプル単位平滑状態
+    float modSmCoef = 0.002f;
+    bool  modSmInit = false;
+    float satAmtSm = 0.0f, satDriveSm = 2.0f;
+    float choAmtSm = 0.0f, choDepthSm = 0.5f;
+    float revShimSm = 0.4f;
+    float duckAmtSm = 0.0f, duckShapeSm = 2.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FxChain)
 };
