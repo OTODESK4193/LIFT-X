@@ -64,7 +64,8 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     hint.setColour(juce::Label::textColourId, LiftColors::textDim);
     hint.setJustificationType(juce::Justification::centredLeft);
     hint.setText("Center = knob value / Top = max / Bottom = min   "
-                 "TIME & RATE: +-2 octaves (lower = faster)",
+                 "TIME & RATE: +-2 octaves (lower = faster)   "
+                 "ROUTE: sources switched off bypass this effect entirely",
                  juce::dontSendNotification);
     addAndMakeVisible(hint);
 
@@ -95,6 +96,23 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     mkKnob(duckAmt, "AMT", "duckAmt", LiftColors::IdPeach);
     mkCombo(duckRateBox, duckRateLabel, "RATE", "duckRate", FxChain::getDuckRateNames());
     mkKnob(duckShape, "SHAPE", "duckShape", LiftColors::IdPeach);
+
+    // ---- ソース別ルーティング (FILTERタブと同じ操作感) ----
+    //  OFFにしたソースは、選択中のエフェクトを完全にバイパスして素通しする。
+    {
+        static const char* srcBtnNames[RiserEngine::kNumSources] =
+            { "OSC 1", "OSC 2", "OSC 3", "NOISE" };
+        for (int s = 0; s < RiserEngine::kNumSources; ++s)
+        {
+            routeToggles[(size_t)s] = std::make_unique<GlowToggle>(
+                srcBtnNames[s], s == 3 ? LiftColors::lilac : LiftColors::accentOsc);
+            addAndMakeVisible(*routeToggles[(size_t)s]);
+        }
+        routeLabel.setText("ROUTE:", juce::dontSendNotification);
+        routeLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+        routeLabel.setColour(juce::Label::textColourId, LiftColors::textDim);
+        addAndMakeVisible(routeLabel);
+    }
 
     setFx(0);
     startTimerHz(30);
@@ -163,6 +181,22 @@ std::vector<juce::Component*> FxPanel::componentsFor(int fx)
     }
 }
 
+// 選択中エフェクトのルーティングパラメーターへアタッチし直す
+void FxPanel::rebuildRouteAttachments()
+{
+    static const char* fxPrefix[5] = { "sat", "cho", "dly", "rev", "duck" };
+    static const char* srcIds[RiserEngine::kNumSources] = { "Osc1", "Osc2", "Osc3", "Noise" };
+
+    for (int s = 0; s < RiserEngine::kNumSources; ++s)
+    {
+        routeAtts[(size_t)s].reset();   // 先に解除してから張り替える
+        routeAtts[(size_t)s] = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            proc.apvts,
+            juce::String(fxPrefix[juce::jlimit(0, 4, activeFx)]) + "Route" + srcIds[s],
+            *routeToggles[(size_t)s]);
+    }
+}
+
 void FxPanel::setFx(int idx)
 {
     activeFx = juce::jlimit(0, 4, idx);
@@ -170,6 +204,8 @@ void FxPanel::setFx(int idx)
     for (int f = 0; f < 5; ++f)
         for (auto* c : componentsFor(f))
             c->setVisible(f == activeFx);
+
+    rebuildRouteAttachments();
 
     const auto& d = defs()[(size_t)activeFx];
     for (int i = 0; i < 3; ++i)
@@ -307,6 +343,19 @@ void FxPanel::resized()
     {
         fxTabs[(size_t)i]->setBounds(tabRow.removeFromLeft(108));
         tabRow.removeFromLeft(6);
+    }
+
+    r.removeFromTop(8);
+
+    // ---- ソース別ルーティング行 (選択中のエフェクトに対して働く) ----
+    {
+        auto routeRow = r.removeFromTop(24);
+        routeLabel.setBounds(routeRow.removeFromLeft(64));
+        for (int s = 0; s < RiserEngine::kNumSources; ++s)
+        {
+            routeToggles[(size_t)s]->setBounds(routeRow.removeFromLeft(96));
+            routeRow.removeFromLeft(6);
+        }
     }
 
     r.removeFromTop(8);

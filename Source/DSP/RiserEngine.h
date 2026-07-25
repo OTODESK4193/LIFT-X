@@ -251,11 +251,14 @@ public:
         return uiPitch[(size_t)juce::jlimit(0, kNumOscs - 1, osc)].load(std::memory_order_relaxed);
     }
 
-    // ---- レンダリング (L/R は加算ミックス) ----
-    void render(float* outL, float* outR, int numSamples, const Params& p,
+    // ---- レンダリング ----
+    //  busL/busR : OSC1 / OSC2 / OSC3 / Noise の4系統ステレオバス (加算書き込み)
+    //  FXチェーンでソース別ルーティングを行うため、ミックスせずに分離したまま返す。
+    //  呼び出し側は事前にバスをゼロクリアしておくこと。
+    void render(float* const* busL, float* const* busR, int numSamples, const Params& p,
                 const CurveStore& curves) noexcept
     {
-        if (numSamples <= 0) return;
+        if (numSamples <= 0 || busL == nullptr || busR == nullptr) return;
 
         if (!noteHeld && ampEnv <= 1.0e-4f)
         {
@@ -293,7 +296,9 @@ public:
                 if (progress > 1.0) progress = 1.0;
             }
 
-            float l = 0.0f, r = 0.0f;
+            // ソース別の出力 (ミックスせずバスへ書き出す)
+            std::array<float, kNumSources> srcL {};
+            std::array<float, kNumSources> srcR {};
 
             // ---- OSC1-3 (各ソース独立にフィルタールーティング) ----
             for (int o = 0; o < kNumOscs; ++o)
@@ -344,8 +349,8 @@ public:
                     if (p.flt[(size_t)j].on && p.flt[(size_t)j].route[(size_t)o])
                         filters[(size_t)j][(size_t)o].processStereo(lo, ro);
 
-                l += lo;
-                r += ro;
+                srcL[(size_t)o] = lo;
+                srcR[(size_t)o] = ro;
             }
 
             // ---- ノイズ (ソース3) ----
@@ -360,8 +365,8 @@ public:
                     if (p.flt[(size_t)j].on && p.flt[(size_t)j].route[3])
                         filters[(size_t)j][3].processStereo(nl, nr);
 
-                l += nl;
-                r += nr;
+                srcL[3] = nl;
+                srcR[3] = nr;
             }
 
             // ---- アンプエンベロープ + デクリック ----
@@ -370,8 +375,11 @@ public:
             declickGain += declickCoef * (1.0f - declickGain);
 
             const float g = ampEnv * velGain * declickGain;
-            outL[i] += l * g;
-            outR[i] += r * g;
+            for (int s = 0; s < kNumSources; ++s)
+            {
+                busL[s][i] += srcL[(size_t)s] * g;
+                busR[s][i] += srcR[(size_t)s] * g;
+            }
         }
 
         uiProgress.store((float)progress, std::memory_order_relaxed);

@@ -176,7 +176,9 @@ private:
     int mPreparedBlockSize = 0;
     int mMaxBlockSize = 0;      // 事前確保した最大ブロック長 (ホストの申告超過に耐える)
 
-    std::vector<float> mScratchR;
+    // ソース別バス (OSC1-3 + Noise) — FXのソース別ルーティング用。
+    //  prepareToPlay で mMaxBlockSize 分を事前確保する (processBlock内で確保しない)。
+    std::array<std::vector<float>, RiserEngine::kNumSources> mBusL, mBusR;
     juce::LinearSmoothedValue<float> mMasterSm;
 
     // ---- MIDI Learn ----
@@ -230,6 +232,9 @@ private:
     std::array<FltPtrs, RiserEngine::kNumFilters> pFlt {};
 
     std::array<std::atomic<float>*, FxChain::kNumSlots> pFxType {};
+
+    // FXのソース別ルーティング [効果 0:Sat 1:Cho 2:Dly 3:Rev 4:Duck][ソース 0-3]
+    std::array<std::array<std::atomic<float>*, RiserEngine::kNumSources>, 5> pFxRoute {};
 
     std::atomic<float> *pSatAmt = nullptr, *pSatAlgo = nullptr, *pSatDrive = nullptr,
                        *pSatPre = nullptr, *pSatTrim = nullptr;

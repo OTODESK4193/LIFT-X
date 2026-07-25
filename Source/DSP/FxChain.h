@@ -583,8 +583,10 @@ namespace lfx
             phase = (float)(std::fmod(std::fmod(ppq, c) + c, c) / c);
         }
 
-        void process(float& l, float& r, float amount, double bpm,
-                     float cycleBeats, float shape) noexcept
+        // 位相を1サンプル進めて現在のダッキングゲインを返す。
+        //  Duckingは入力に依存しない純ゲインなので、ソース別ルーティングでは
+        //  このゲインを各バスへ直接掛ければよい (合計は従来と厳密に一致する)。
+        float nextGain(float amount, double bpm, float cycleBeats, float shape) noexcept
         {
             const double safeBpm = (bpm > 0.0) ? bpm : 120.0;
             phase += (float)((safeBpm / 60.0) / (sampleRate * (double)juce::jmax(0.0625f, cycleBeats)));
@@ -595,8 +597,15 @@ namespace lfx
             const float target = 1.0f - juce::jlimit(0.0f, 1.0f, amount) * 0.95f * dip;
 
             gainSm += (target < gainSm ? dipCoef : relCoef) * (target - gainSm);
-            l *= gainSm;
-            r *= gainSm;
+            return gainSm;
+        }
+
+        void process(float& l, float& r, float amount, double bpm,
+                     float cycleBeats, float shape) noexcept
+        {
+            const float g = nextGain(amount, bpm, cycleBeats, shape);
+            l *= g;
+            r *= g;
         }
 
     private:
@@ -732,6 +741,7 @@ public:
     FxChain() = default;
 
     static constexpr int kNumSlots = 5;
+    static constexpr int kNumSources = 4;   // OSC1-3 + Noise (RiserEngine と対応)
 
     enum FxType { None = 0, Saturation, Chorus, Delay, Reverb, Ducking };
 
@@ -818,6 +828,15 @@ public:
         float duckAmt = 0.0f;
         float duckBeats = 1.0f;     // 合成済み拍数
         float duckShape = 2.0f;     // 0.5..8
+
+        // --- エフェクト種別ごとのソース別ルーティング ---
+        //  route[効果][ソース] : 効果 = 0:Sat 1:Cho 2:Dly 3:Rev 4:Duck
+        //                       ソース = 0:OSC1 1:OSC2 2:OSC3 3:Noise
+        //  false のソースはそのエフェクトを完全にバイパスして素通しする。
+        std::array<std::array<bool, kNumSources>, 5> route {{
+            { true, true, true, true }, { true, true, true, true },
+            { true, true, true, true }, { true, true, true, true },
+            { true, true, true, true } }};
     };
 
     void prepare(double sr)
@@ -841,11 +860,27 @@ public:
         modSmInit = false;
     }
 
-    void process(juce::AudioBuffer<float>& buf, const Params& p) noexcept
+    // ==========================================================
+    // ソース別ルーティング対応の処理 (v0.4.1)
+    //
+    //  busL/busR : OSC1 / OSC2 / OSC3 / Noise の4系統ステレオバス (in-place処理)
+    //
+    //  設計:
+    //   エフェクトのモジュール実体は各1個のまま共有する。ソース毎に独立した
+    //   FXチェーンを持つとShimmerReverbだけで96kHz時11.7MB×4となり非現実的。
+    //   代わりに「ルーティングされたバスの合計」をモジュールへ通し、
+    //   モジュールが加えた変化量(差分)を対象バスへ均等配分して書き戻す。
+    //
+    //   ・全ソースONのとき、バス合計は従来の単一信号処理と数値的に一致する
+    //     (既存プリセットの音が変わらない)
+    //   ・Duckingは入力非依存の純ゲインなので、差分ではなくゲインを
+    //     各バスへ直接掛ける (こちらの方が下流ルーティングとの相性が良い)
+    //   ・スロット間ソフトクリップも「合計」に対して判定し、
+    //     求まったゲインを全バスへ配分する (同じく従来と一致)
+    // ==========================================================
+    void process(float* const* busL, float* const* busR, int numSamples, const Params& p) noexcept
     {
-        const int numSamples = buf.getNumSamples();
-        const int channels = buf.getNumChannels();
-        if (numSamples <= 0 || channels == 0) return;
+        if (numSamples <= 0 || busL == nullptr || busR == nullptr) return;
 
         // 全スロット None のときのみ早期リターン
         // (amt==0 でも Delay/Reverb の内部バッファ更新は継続する)
@@ -853,9 +888,6 @@ public:
         for (int s = 0; s < kNumSlots; ++s)
             if (p.type[(size_t)s] > 0) anyTyped = true;
         if (!anyTyped) return;
-
-        float* dL = buf.getWritePointer(0);
-        float* dR = channels > 1 ? buf.getWritePointer(1) : dL;
 
         const int satType = satAlgoToType(p.satAlgo);
         const float trimGain = juce::Decibels::decibelsToGain(juce::jlimit(-12.0f, 12.0f, p.satTrimDb));
@@ -897,41 +929,80 @@ public:
             duckAmtSm   += modSmCoef * (p.duckAmt - duckAmtSm);
             duckShapeSm += modSmCoef * (p.duckShape - duckShapeSm);
 
-            float l = dL[i];
-            float r = dR[i];
-
             for (int s = 0; s < kNumSlots; ++s)
             {
-                switch (p.type[(size_t)s])
+                const int t = p.type[(size_t)s];
+                if (t > 0)
                 {
-                case Saturation:
-                    if (satAmtSm > 0.0005f)
-                        saturate(l, r, satAmtSm, satType, satDriveSm, preAlpha, trimGain);
-                    break;
-                case Chorus:
-                    chorus.process(l, r, choAmtSm, p.choRate, choDepthSm, p.choWidth);
-                    break;
-                case Delay:
-                    delay.process(l, r, p.dlyAmt, p.bpm, p.dlyBeats, p.dlyFeedback, p.dlyDuck, p.dlyDamp);
-                    break;
-                case Reverb:
-                    reverb.process(l, r, p.revAmt, p.revDecay, revShimSm, p.revDamp, p.revMod);
-                    break;
-                case Ducking:
-                    ducker.process(l, r, duckAmtSm, p.bpm, p.duckBeats, duckShapeSm);
-                    break;
-                default: break;
+                    const auto& rt = p.route[(size_t)juce::jlimit(0, 4, t - 1)];
+
+                    // ルーティング対象バスの合計を作る
+                    float inL = 0.0f, inR = 0.0f;
+                    int n = 0;
+                    for (int k = 0; k < kNumSources; ++k)
+                        if (rt[(size_t)k]) { inL += busL[k][i]; inR += busR[k][i]; ++n; }
+
+                    if (t == Ducking)
+                    {
+                        // 純ゲイン: 対象バスへ直接適用 (対象が0本でも位相は進める)
+                        const float g = ducker.nextGain(duckAmtSm, p.bpm, p.duckBeats, duckShapeSm);
+                        for (int k = 0; k < kNumSources; ++k)
+                            if (rt[(size_t)k]) { busL[k][i] *= g; busR[k][i] *= g; }
+                    }
+                    else
+                    {
+                        // 対象が0本でも in=0 でモジュールを回し、内部バッファ/LFOを
+                        // 進め続ける (陳腐化バースト防止。従来の設計方針を踏襲)
+                        float oL = inL, oR = inR;
+                        switch (t)
+                        {
+                        case Saturation:
+                            if (satAmtSm > 0.0005f)
+                                saturate(oL, oR, satAmtSm, satType, satDriveSm, preAlpha, trimGain);
+                            break;
+                        case Chorus:
+                            chorus.process(oL, oR, choAmtSm, p.choRate, choDepthSm, p.choWidth);
+                            break;
+                        case Delay:
+                            delay.process(oL, oR, p.dlyAmt, p.bpm, p.dlyBeats, p.dlyFeedback, p.dlyDuck, p.dlyDamp);
+                            break;
+                        case Reverb:
+                            reverb.process(oL, oR, p.revAmt, p.revDecay, revShimSm, p.revDamp, p.revMod);
+                            break;
+                        default: break;
+                        }
+
+                        if (n > 0)
+                        {
+                            const float inv = 1.0f / (float)n;
+                            const float dLd = (oL - inL) * inv;
+                            const float dRd = (oR - inR) * inv;
+                            for (int k = 0; k < kNumSources; ++k)
+                                if (rt[(size_t)k]) { busL[k][i] += dLd; busR[k][i] += dRd; }
+                        }
+                    }
                 }
 
+                // スロット間ソフトクリップ: 合計に対して判定し、ゲインを全バスへ配分
                 if (s < kNumSlots - 1)
                 {
-                    l = interSlotClip(l);
-                    r = interSlotClip(r);
+                    float sL = 0.0f, sR = 0.0f;
+                    for (int k = 0; k < kNumSources; ++k) { sL += busL[k][i]; sR += busR[k][i]; }
+
+                    const float cL = interSlotClip(sL);
+                    const float cR = interSlotClip(sR);
+                    if (cL != sL || cR != sR)
+                    {
+                        const float gL = (std::abs(sL) > 1.0e-12f) ? cL / sL : 1.0f;
+                        const float gR = (std::abs(sR) > 1.0e-12f) ? cR / sR : 1.0f;
+                        for (int k = 0; k < kNumSources; ++k)
+                        {
+                            busL[k][i] *= gL;
+                            busR[k][i] *= gR;
+                        }
+                    }
                 }
             }
-
-            dL[i] = l;
-            if (channels > 1) dR[i] = r;
         }
     }
 

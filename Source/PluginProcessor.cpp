@@ -346,6 +346,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
     add(std::make_unique<FloatP>(juce::ParameterID{"limRelease", 1}, "Limiter Release",
         logRange(20.0f, 1000.0f), 120.0f, attr(msStr)));
 
+    // ---- FXのソース別ルーティング (エフェクト種別 × OSC1-3/Noise) ----
+    //  OFFにしたソースは、そのエフェクトを完全にバイパスして素通しする。
+    //  デフォルトは全ON = 従来と完全に同じ挙動。
+    //  ※ 既存セッションのオートメーション割り当てに影響しないよう、
+    //     必ずパラメーターリストの末尾に追加すること。
+    {
+        static const char* fxPrefix[5] = { "sat", "cho", "dly", "rev", "duck" };
+        static const char* fxLabel[5]  = { "Sat", "Chorus", "Delay", "Reverb", "Duck" };
+        for (int f = 0; f < 5; ++f)
+            for (int s = 0; s < RiserEngine::kNumSources; ++s)
+                add(std::make_unique<BoolP>(
+                    juce::ParameterID{ juce::String(fxPrefix[f]) + "Route" + srcNames[s], 1 },
+                    juce::String(fxLabel[f]) + " " + srcNames[s], true));
+    }
+
     return { params.begin(), params.end() };
 }
 
@@ -397,6 +412,13 @@ void LiftXAudioProcessor::cacheParameterPointers()
     for (int i = 0; i < FxChain::kNumSlots; ++i)
         pFxType[(size_t)i] = p("fx" + juce::String(i + 1) + "Type");
 
+    {
+        static const char* fxPrefix[5] = { "sat", "cho", "dly", "rev", "duck" };
+        for (int f = 0; f < 5; ++f)
+            for (int s = 0; s < RiserEngine::kNumSources; ++s)
+                pFxRoute[(size_t)f][(size_t)s] = p(juce::String(fxPrefix[f]) + "Route" + srcNames[s]);
+    }
+
     pSatAmt = p("satAmt");   pSatAlgo = p("satAlgo"); pSatDrive = p("satDrive");
     pSatPre = p("satPre");   pSatTrim = p("satTrim");
     pChoAmt = p("choAmt");   pChoRate = p("choRate"); pChoDepth = p("choDepth"); pChoWidth = p("choWidth");
@@ -431,7 +453,11 @@ void LiftXAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     mFx.prepare(sampleRate);
     mLimiter.prepare(sampleRate);
 
-    mScratchR.assign((size_t)mMaxBlockSize, 0.0f);
+    for (int s = 0; s < RiserEngine::kNumSources; ++s)
+    {
+        mBusL[(size_t)s].assign((size_t)mMaxBlockSize, 0.0f);
+        mBusR[(size_t)s].assign((size_t)mMaxBlockSize, 0.0f);
+    }
 
     // キャプチャバッファ (最大30秒・ステレオ / サンプル数上限でメモリを抑制)
     const size_t capSize = (size_t)juce::jlimit<juce::int64>(
@@ -538,26 +564,52 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     RiserEngine::Params ep;
     gatherEngineParams(ep);
 
-    float* L = buffer.getWritePointer(0);
-    float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : mScratchR.data();
-    if (buffer.getNumChannels() <= 1)
-        juce::FloatVectorOperations::clear(mScratchR.data(), numSamples);
-
-    mEngine.render(L, R, numSamples, ep, mCurves);
-
-    // モノラル出力時は (L+R)/2 で正しくダウンミックス。
-    //  旧実装は L + 0.5*R となっており、モノ環境でレベルが約1.5倍・
-    //  左右バランスが崩れていた (ユニゾンSPREAD時に顕著)。
-    if (buffer.getNumChannels() <= 1)
+    // ---- ソース別バスへレンダリング ----
+    //  FXのソース別ルーティングのため、OSC1/2/3/Noise を分離したまま
+    //  FXチェーンへ渡し、最後にまとめて出力バッファへ合算する。
+    float* busL[RiserEngine::kNumSources];
+    float* busR[RiserEngine::kNumSources];
+    for (int s = 0; s < RiserEngine::kNumSources; ++s)
     {
-        juce::FloatVectorOperations::multiply(L, 0.5f, numSamples);
-        juce::FloatVectorOperations::addWithMultiply(L, mScratchR.data(), 0.5f, numSamples);
+        busL[s] = mBusL[(size_t)s].data();
+        busR[s] = mBusR[(size_t)s].data();
+        juce::FloatVectorOperations::clear(busL[s], numSamples);
+        juce::FloatVectorOperations::clear(busR[s], numSamples);
     }
+
+    mEngine.render(busL, busR, numSamples, ep, mCurves);
 
     // ---- FXチェーン (カーブ変調をブロックレートで合成) ----
     FxChain::Params fp;
     gatherFxParams(fp, bpm, ppq, playing);
-    mFx.process(buffer, fp);
+    mFx.process(busL, busR, numSamples, fp);
+
+    // ---- バス合算 → 出力バッファ ----
+    //  モノラル出力時は (L+R)/2 で正しくダウンミックスする。
+    //  (FX自体はステレオのまま処理してから畳むため、コーラス/リバーブの
+    //   ステレオ感がモノ和として正しく残る)
+    {
+        float* outL = buffer.getWritePointer(0);
+        const bool stereo = buffer.getNumChannels() > 1;
+        float* outR = stereo ? buffer.getWritePointer(1) : nullptr;
+
+        if (stereo)
+        {
+            for (int s = 0; s < RiserEngine::kNumSources; ++s)
+            {
+                juce::FloatVectorOperations::add(outL, busL[s], numSamples);
+                juce::FloatVectorOperations::add(outR, busR[s], numSamples);
+            }
+        }
+        else
+        {
+            for (int s = 0; s < RiserEngine::kNumSources; ++s)
+            {
+                juce::FloatVectorOperations::addWithMultiply(outL, busL[s], 0.5f, numSamples);
+                juce::FloatVectorOperations::addWithMultiply(outL, busR[s], 0.5f, numSamples);
+            }
+        }
+    }
 
     // ---- マスターゲイン + セーフティクリップ ----
     mMasterSm.setTargetValue(juce::Decibels::decibelsToGain(pMaster->load()));
@@ -704,6 +756,10 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
 
     for (int s = 0; s < FxChain::kNumSlots; ++s)
         fp.type[(size_t)s] = (int)pFxType[(size_t)s]->load();
+
+    for (int f = 0; f < 5; ++f)
+        for (int s = 0; s < RiserEngine::kNumSources; ++s)
+            fp.route[(size_t)f][(size_t)s] = pFxRoute[(size_t)f][(size_t)s]->load() > 0.5f;
 
     // マルチENVカーブによるバイポーラ加算変調 (中央=ノブ値, ±レンジ半分)
     //  評価位置: Auto=Progress / Manual=LIFTノブ (エンジンと同一規則)

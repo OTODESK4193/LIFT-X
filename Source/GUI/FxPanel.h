@@ -16,6 +16,7 @@
 #include "../PluginProcessor.h"
 #include "CurveEditor.h"
 #include "ValueKnob.h"
+#include "GlowToggle.h"
 #include "ModBand.h"
 #include "ColorPalette.h"
 
@@ -89,6 +90,13 @@ private:
     Cell duckAmt, duckShape;
     juce::ComboBox duckRateBox;
     juce::Label duckRateLabel;
+
+    // ---- ソース別ルーティング (選択中のエフェクトに追従) ----
+    void rebuildRouteAttachments();
+    juce::Label routeLabel;
+    std::array<std::unique_ptr<GlowToggle>, RiserEngine::kNumSources> routeToggles;
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>,
+               RiserEngine::kNumSources> routeAtts;
 
     juce::Rectangle<int> detailArea;
 
