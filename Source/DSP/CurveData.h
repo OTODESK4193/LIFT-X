@@ -31,7 +31,8 @@
 // ------------------------------------------
 struct CurveSnapshot
 {
-    static constexpr int kMaxPoints = 32;
+    // Steps/Saw/Pulse 32分割プリセット (最大65点) に対応するため128点
+    static constexpr int kMaxPoints = 128;
 
     struct Point
     {

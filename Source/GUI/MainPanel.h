@@ -20,6 +20,7 @@
 #include "WavetableBrowser.h"
 #include "RiserWaveStrip.h"
 #include "ModBand.h"
+#include "PitchRail.h"
 #include "ColorPalette.h"
 
 class MainPanel : public juce::Component,
@@ -113,6 +114,8 @@ private:
     std::array<juce::TextButton, 3> browseBtn, rndBtn;
     std::array<KnobCell, 3> oscPos, oscLevel, oscCoarse, oscUni, oscDet, oscSpread;
     std::array<juce::TextButton, 3> keyStartBtn, keyEndBtn;
+    // Pitch ENV ライブ表示 (ノブが無いParameterのためModBandではなく専用バー)
+    std::array<std::unique_ptr<PitchRail>, 3> pitchRail;
 
     // 波形表示の更新検知用
     std::array<int, 3> lastWaveMode { -1, -1, -1 };

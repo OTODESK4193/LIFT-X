@@ -46,6 +46,9 @@ LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
     addChildComponent(presetPanel);
     addChildComponent(configPanel);
 
+    // PRESETタブのCloseボタン → MAINタブへ戻る
+    presetPanel.onClose = [this] { setActiveTab(Tab::Main); };
+
     setActiveTab(Tab::Main);
     setSize(1020, 640);
 }

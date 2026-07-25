@@ -17,11 +17,14 @@
 
 #include "DSP/Wavetable.h"
 #include "DSP/CurveData.h"
+#include "DSP/ScaleQuantizer.h"
 #include "DSP/RiserEngine.h"
 #include "DSP/FxChain.h"
 #include "DSP/Limiter.h"
 
-class LiftXAudioProcessor : public juce::AudioProcessor
+class LiftXAudioProcessor : public juce::AudioProcessor,
+                            private juce::AudioProcessorValueTreeState::Listener,
+                            private juce::AsyncUpdater
 {
 public:
     LiftXAudioProcessor();
@@ -55,6 +58,9 @@ public:
     // ---- GUIとの橋渡し ----
     CurveStore& getCurves() noexcept { return mCurves; }
     float getUiProgress() const noexcept { return mEngine.uiProgress.load(std::memory_order_relaxed); }
+
+    // OSC毎のライブ絶対ピッチ (MIDIノート番号・小数)。PITCH RAIL表示用。
+    float getUiPitch(int oscIdx) const noexcept { return mEngine.getUiPitch(oscIdx); }
 
     // ---- MIDI Learn (StartKey/EndKey設定用) ----
     //  GUI側はイベントカウンタの増加を監視し、最終ノート番号を取得する。
@@ -122,12 +128,38 @@ public:
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void cacheParameterPointers();
+
+    // ---- Key/Scale変更時の Start/End キー自動スナップ ----
+    //  scaleOn / scaleKey / scaleType / osc{N}Scale のいずれかが変わったら、
+    //  対象OSCのStart/Endキーをスケールの最寄り音へスナップする。
+    //  スナップ後はユーザーが自由に変更でき、次にKey/Scaleを触るまで再スナップしない。
+    //  プリセット/ステート復元では発火しない (適用直後にスナップ状態を記録するため)。
+    struct SnapState
+    {
+        bool on = false;
+        int  key = -1;
+        int  type = -1;
+        std::array<bool, RiserEngine::kNumOscs> oscApply { false, false, false };
+        bool operator!=(const SnapState& o) const noexcept
+        {
+            return on != o.on || key != o.key || type != o.type || oscApply != o.oscApply;
+        }
+    };
+    SnapState readSnapState() const;
+    void parameterChanged(const juce::String& id, float newValue) override;
+    void handleAsyncUpdate() override;
+    void snapKeysToScale();
+    void rememberSnapState();
+
+    SnapState mLastSnapState;
     void gatherEngineParams(RiserEngine::Params& ep) const noexcept;
     void gatherFxParams(FxChain::Params& fp, double bpm, double ppq, bool playing) const noexcept;
     void applyStateTree(juce::ValueTree state);   // APVTS+カーブ+WTパスを適用
     juce::ValueTree buildStateTree();             // 現在の全ステートをツリー化
 
     juce::String mCurrentPresetName;
+    int mCurrentFactoryIndex = -1;   // Factoryプリセット由来なら 0.. / それ以外 -1
+    juce::File mCurrentUserFile;     // Userプリセット由来ならそのファイル
 
     // ---- DSPモジュール ----
     std::array<MorphWavetable, RiserEngine::kNumOscs> mWavetables;
@@ -142,6 +174,7 @@ private:
     bool mPrepared = false;
     double mPreparedSampleRate = 0.0;
     int mPreparedBlockSize = 0;
+    int mMaxBlockSize = 0;      // 事前確保した最大ブロック長 (ホストの申告超過に耐える)
 
     std::vector<float> mScratchR;
     juce::LinearSmoothedValue<float> mMasterSm;
@@ -150,8 +183,13 @@ private:
     std::atomic<int> mLastNote { -1 };
     std::atomic<int> mNoteEvents { 0 };
 
-    // ---- ライザー出力キャプチャ (prepareToPlayで事前確保・最大30秒) ----
+    // ---- ライザー出力キャプチャ (prepareToPlayで事前確保) ----
+    //  最大30秒。ただし高SRでのメモリ肥大を防ぐためサンプル数の上限も設ける。
+    //  30秒×192kHz×2ch = 46MB になっていたため、上限を設けて約24MBへ抑える。
+    //   44.1 / 48 / 88.2 / 96kHz : 30秒フル (上限に当たらない)
+    //   176.4kHz : 約17秒 / 192kHz : 約15.6秒
     static constexpr double kMaxCaptureSeconds = 30.0;
+    static constexpr int    kMaxCaptureSamples = 3000000;   // 1chあたり (=24MB/2ch)
     std::vector<float> mCapL, mCapR;
     int mCapWrite = 0;
     int mCapRiserLen = 0;      // 設定Bar分のサンプル数 (本編はここで打ち切り)
@@ -166,6 +204,9 @@ private:
     std::atomic<float>* pLift = nullptr;
     std::atomic<float>* pLiftMode = nullptr;   // 0=Manual 1=Auto(Progress連動)
     std::atomic<float>* pBars = nullptr;
+    std::atomic<float>* pScaleOn = nullptr;    // Pitch ENV スケール量子化 マスターOn/Off
+    std::atomic<float>* pScaleKey = nullptr;   // 0..11 (C..B)
+    std::atomic<float>* pScaleType = nullptr;  // ScaleQuantizer インデックス
     std::atomic<float>* pAttack = nullptr;
     std::atomic<float>* pRelease = nullptr;
     std::atomic<float>* pMaster = nullptr;
@@ -173,7 +214,7 @@ private:
     struct OscPtrs
     {
         std::atomic<float> *on, *solo, *mute, *wave, *pos, *level,
-                           *coarse, *uni, *det, *spread, *keyStart, *keyEnd;
+                           *coarse, *uni, *det, *spread, *keyStart, *keyEnd, *scaleQ;
     };
     std::array<OscPtrs, RiserEngine::kNumOscs> pOsc {};
 

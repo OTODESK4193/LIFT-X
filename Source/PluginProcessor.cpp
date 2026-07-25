@@ -85,9 +85,96 @@ LiftXAudioProcessor::LiftXAudioProcessor()
     for (int i = 0; i < RiserEngine::kNumOscs; ++i)
         mEngine.setWavetable(i, &mWavetables[(size_t)i]);
     cacheParameterPointers();
+
+    // Key/Scale変更を監視して Start/End キーを自動スナップする
+    apvts.addParameterListener("scaleOn", this);
+    apvts.addParameterListener("scaleKey", this);
+    apvts.addParameterListener("scaleType", this);
+    for (int i = 1; i <= RiserEngine::kNumOscs; ++i)
+        apvts.addParameterListener("osc" + juce::String(i) + "Scale", this);
+
+    rememberSnapState();   // 起動直後は現在値をそのまま採用 (勝手に動かさない)
 }
 
-LiftXAudioProcessor::~LiftXAudioProcessor() = default;
+LiftXAudioProcessor::~LiftXAudioProcessor()
+{
+    cancelPendingUpdate();
+    apvts.removeParameterListener("scaleOn", this);
+    apvts.removeParameterListener("scaleKey", this);
+    apvts.removeParameterListener("scaleType", this);
+    for (int i = 1; i <= RiserEngine::kNumOscs; ++i)
+        apvts.removeParameterListener("osc" + juce::String(i) + "Scale", this);
+}
+
+// ==========================================================
+// Key/Scale変更時の Start/End キー自動スナップ
+// ==========================================================
+LiftXAudioProcessor::SnapState LiftXAudioProcessor::readSnapState() const
+{
+    SnapState s;
+    s.on   = pScaleOn   != nullptr && pScaleOn->load() > 0.5f;
+    s.key  = pScaleKey  != nullptr ? (int)pScaleKey->load() : 0;
+    s.type = pScaleType != nullptr ? (int)pScaleType->load() : 0;
+    for (int i = 0; i < RiserEngine::kNumOscs; ++i)
+        s.oscApply[(size_t)i] = pOsc[(size_t)i].scaleQ != nullptr
+                             && pOsc[(size_t)i].scaleQ->load() > 0.5f;
+    return s;
+}
+
+void LiftXAudioProcessor::rememberSnapState()
+{
+    mLastSnapState = readSnapState();
+}
+
+void LiftXAudioProcessor::parameterChanged(const juce::String&, float)
+{
+    // オーディオスレッドから呼ばれる可能性があるためここでは何もせず、
+    // メッセージスレッドへ処理を委譲する (パラメーター書き換えはRT非安全)。
+    triggerAsyncUpdate();
+}
+
+void LiftXAudioProcessor::handleAsyncUpdate()
+{
+    const auto now = readSnapState();
+    if (!(now != mLastSnapState))
+        return;                    // 実質変化なし (ステート復元直後など)
+
+    mLastSnapState = now;
+    if (now.on)
+        snapKeysToScale();
+}
+
+void LiftXAudioProcessor::snapKeysToScale()
+{
+    const int key = juce::jlimit(0, 11, mLastSnapState.key);
+    const int type = juce::jlimit(0, ScaleQuantizer::numScales() - 1, mLastSnapState.type);
+
+    auto snapOne = [this, key, type](const juce::String& id)
+    {
+        auto* prm = apvts.getParameter(id);
+        if (prm == nullptr) return;
+
+        const auto& range = prm->getNormalisableRange();
+        const float cur = range.convertFrom0to1(prm->getValue());
+        float snapped = ScaleQuantizer::quantize(cur, key, type);
+
+        // 0..127 の範囲外へ出た場合はオクターブ単位で内側へ戻す
+        while (snapped < range.start) snapped += 12.0f;
+        while (snapped > range.end)   snapped -= 12.0f;
+        snapped = juce::jlimit(range.start, range.end, std::round(snapped));
+
+        if (std::abs(snapped - cur) < 0.5f) return;   // 既に構成音
+        prm->setValueNotifyingHost(range.convertTo0to1(snapped));
+    };
+
+    for (int i = 0; i < RiserEngine::kNumOscs; ++i)
+    {
+        if (!mLastSnapState.oscApply[(size_t)i]) continue;   // 適用外のOSCは触らない
+        const juce::String n(i + 1);
+        snapOne("osc" + n + "KeyStart");
+        snapOne("osc" + n + "KeyEnd");
+    }
+}
 
 // ==========================================================
 // パラメーターレイアウト (カーブ=マルチENVはCurveStoreで管理しここに置かない)
@@ -119,6 +206,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
     add(std::make_unique<FloatP>(juce::ParameterID{"master", 1}, "Master",
         juce::NormalisableRange<float>(-24.0f, 12.0f, 0.1f), 0.0f, attr(dbStr)));
 
+    // ---- Pitch ENV スケール量子化 (CONFIGタブ) ----
+    //  Off : カーブ通りの滑らかなピッチ変化 (従来動作)
+    //  On  : Key + Scale の構成音のみを通る階段状のピッチ変化
+    add(std::make_unique<BoolP>(juce::ParameterID{"scaleOn", 1}, "Scale Quantize", false));
+    add(std::make_unique<ChoiceP>(juce::ParameterID{"scaleKey", 1}, "Scale Key",
+        juce::StringArray{ "C", "C#", "D", "D#", "E", "F",
+                           "F#", "G", "G#", "A", "A#", "B" }, 0));
+    {
+        juce::StringArray scaleNames;
+        for (const auto& s : ScaleQuantizer::getScales())
+            scaleNames.add(s.name);
+        add(std::make_unique<ChoiceP>(juce::ParameterID{"scaleType", 1}, "Scale Type",
+            scaleNames, 2)); // デフォルト = Natural Minor
+    }
+
     // ---- オシレーター 1-3 ----
     for (int i = 1; i <= RiserEngine::kNumOscs; ++i)
     {
@@ -145,6 +247,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
             0, 127, 36, noteAttr));
         add(std::make_unique<IntP>(juce::ParameterID{"osc" + n + "KeyEnd", 1}, "Osc" + n + " End Key",
             0, 127, 84, noteAttr));
+        // このOSCにスケール量子化を適用するか (マスターscaleOnとのAND)
+        add(std::make_unique<BoolP>(juce::ParameterID{"osc" + n + "Scale", 1},
+            "Osc" + n + " Scale Quantize", true));
     }
 
     // ---- ノイズ ----
@@ -254,6 +359,9 @@ void LiftXAudioProcessor::cacheParameterPointers()
     pAttack = p("attack");
     pRelease = p("release");
     pMaster = p("master");
+    pScaleOn = p("scaleOn");
+    pScaleKey = p("scaleKey");
+    pScaleType = p("scaleType");
 
     for (int i = 0; i < RiserEngine::kNumOscs; ++i)
     {
@@ -261,7 +369,8 @@ void LiftXAudioProcessor::cacheParameterPointers()
         pOsc[(size_t)i] = { p("osc" + n + "On"), p("osc" + n + "Solo"), p("osc" + n + "Mute"),
                             p("osc" + n + "Wave"), p("osc" + n + "Pos"), p("osc" + n + "Level"),
                             p("osc" + n + "Coarse"), p("osc" + n + "Uni"), p("osc" + n + "Det"),
-                            p("osc" + n + "Spread"), p("osc" + n + "KeyStart"), p("osc" + n + "KeyEnd") };
+                            p("osc" + n + "Spread"), p("osc" + n + "KeyStart"), p("osc" + n + "KeyEnd"),
+                            p("osc" + n + "Scale") };
     }
 
     pNoiseSolo = p("noiseSolo");
@@ -312,16 +421,22 @@ float LiftXAudioProcessor::getEnvPosition() const noexcept
 void LiftXAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     mPreparedSampleRate = sampleRate;
+    // 一部のホスト (オフラインバウンス/フリーズ/一部ライブ環境) は prepareToPlay で
+    // 通知したサイズより大きなブロックを渡してくることがある。
+    // 余裕を持って確保し、ブロックサイズ超過で無音になる事故を防ぐ。
     mPreparedBlockSize = juce::jmax(16, samplesPerBlock);
+    mMaxBlockSize = juce::jmax(mPreparedBlockSize * 2, 8192);
 
     mEngine.prepare(sampleRate);
     mFx.prepare(sampleRate);
     mLimiter.prepare(sampleRate);
 
-    mScratchR.assign((size_t)mPreparedBlockSize, 0.0f);
+    mScratchR.assign((size_t)mMaxBlockSize, 0.0f);
 
-    // キャプチャバッファ (最大30秒・ステレオ)
-    const size_t capSize = (size_t)(sampleRate * kMaxCaptureSeconds);
+    // キャプチャバッファ (最大30秒・ステレオ / サンプル数上限でメモリを抑制)
+    const size_t capSize = (size_t)juce::jlimit<juce::int64>(
+        16384, (juce::int64)kMaxCaptureSamples,
+        (juce::int64)(sampleRate * kMaxCaptureSeconds));
     mCapL.assign(capSize, 0.0f);
     mCapR.assign(capSize, 0.0f);
     mCapWrite = 0;
@@ -359,9 +474,11 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     const int numSamples = buffer.getNumSamples();
 
     // ---- DAWフェイルセーフ層 ----
+    //  SR不一致 / 未prepare / 事前確保を超える異常ブロックのみ停止する。
+    //  (通常のブロックサイズ変動は mMaxBlockSize の余裕で吸収する)
     if (!mPrepared
         || std::abs(getSampleRate() - mPreparedSampleRate) > 0.5
-        || numSamples > mPreparedBlockSize
+        || numSamples > mMaxBlockSize
         || numSamples <= 0)
     {
         buffer.clear();
@@ -428,8 +545,14 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
     mEngine.render(L, R, numSamples, ep, mCurves);
 
+    // モノラル出力時は (L+R)/2 で正しくダウンミックス。
+    //  旧実装は L + 0.5*R となっており、モノ環境でレベルが約1.5倍・
+    //  左右バランスが崩れていた (ユニゾンSPREAD時に顕著)。
     if (buffer.getNumChannels() <= 1)
+    {
+        juce::FloatVectorOperations::multiply(L, 0.5f, numSamples);
         juce::FloatVectorOperations::addWithMultiply(L, mScratchR.data(), 0.5f, numSamples);
+    }
 
     // ---- FXチェーン (カーブ変調をブロックレートで合成) ----
     FxChain::Params fp;
@@ -528,6 +651,9 @@ void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noex
     ep.liftAuto = pLiftMode->load() > 0.5f;
     ep.attackMs = pAttack->load();
     ep.releaseMs = pRelease->load();
+    ep.scaleOn = pScaleOn->load() > 0.5f;
+    ep.scaleKey = (int)pScaleKey->load();
+    ep.scaleType = (int)pScaleType->load();
 
     for (int i = 0; i < RiserEngine::kNumOscs; ++i)
     {
@@ -545,6 +671,7 @@ void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noex
         o.spread = q.spread->load();
         o.keyStart = (int)q.keyStart->load();
         o.keyEnd = (int)q.keyEnd->load();
+        o.scaleQ = q.scaleQ->load() > 0.5f;
     }
 
     ep.noiseSolo = pNoiseSolo->load() > 0.5f;
@@ -676,6 +803,10 @@ juce::ValueTree LiftXAudioProcessor::buildStateTree()
         if (state.getChild(i).hasType("CURVES"))
             state.removeChild(i, nullptr);
     state.appendChild(mCurves.toValueTree(), nullptr);
+
+    // プリセット名も保存する (DAW再起動後にヘッダー表示が "Init" に戻る問題の修正)
+    state.setProperty("presetName", mCurrentPresetName, nullptr);
+    state.setProperty("stateVersion", 2, nullptr);
     return state;
 }
 
@@ -684,7 +815,14 @@ void LiftXAudioProcessor::applyStateTree(juce::ValueTree state)
     if (!state.isValid() || !state.hasType(apvts.state.getType()))
         return;
 
-    mCurves.fromValueTree(state.getChildWithName("CURVES"));
+    // カーブ: CURVESが無い/旧バージョンの場合はデフォルトへ戻す。
+    //  (前のプリセットのカーブが残ったまま新しいプリセットが鳴る事故を防ぐ)
+    const auto curveTree = state.getChildWithName("CURVES");
+    if (!curveTree.isValid() || (int)curveTree.getProperty("version", 1) < 2)
+        mCurves.resetToDefaults();
+    else
+        mCurves.fromValueTree(curveTree);
+
     apvts.replaceState(state);
 
     // OSC毎のカスタムWavetable復元
@@ -702,6 +840,10 @@ void LiftXAudioProcessor::applyStateTree(juce::ValueTree state)
             mWavetables[(size_t)i].clearCustom();
         }
     }
+
+    // 復元したKey/Scaleを「スナップ済み」として記録し、
+    // ステート適用が自動スナップを誘発してStart/Endを書き換えるのを防ぐ。
+    rememberSnapState();
 }
 
 void LiftXAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
@@ -712,10 +854,20 @@ void LiftXAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 
 void LiftXAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
+    if (data == nullptr || sizeInBytes <= 0)
+        return;
+
     auto xml = getXmlFromBinary(data, sizeInBytes);
     if (xml == nullptr || !xml->hasTagName(apvts.state.getType()))
         return;
-    applyStateTree(juce::ValueTree::fromXml(*xml));
+
+    const auto tree = juce::ValueTree::fromXml(*xml);
+    applyStateTree(tree);
+
+    // プリセット名の復元 (旧セッションには存在しないため空なら "Init" 扱い)
+    const auto nm = tree.getProperty("presetName", juce::String()).toString();
+    mCurrentPresetName = nm.isNotEmpty() ? nm : juce::String("Init");
+    rememberSnapState();
 }
 
 // ==========================================================
@@ -742,15 +894,23 @@ void LiftXAudioProcessor::saveUserPreset(const juce::String& name, const juce::S
     if (auto xml = buildStateTree().createXml())
         xml->writeTo(file);
     mCurrentPresetName = name;
+    mCurrentFactoryIndex = -1;
+    mCurrentUserFile = file;
 }
 
 bool LiftXAudioProcessor::loadUserPreset(const juce::File& file)
 {
+    if (!file.existsAsFile())
+        return false;
+
     auto xml = juce::parseXML(file);
     if (xml == nullptr || !xml->hasTagName(apvts.state.getType()))
         return false;
     applyStateTree(juce::ValueTree::fromXml(*xml));
     mCurrentPresetName = file.getFileNameWithoutExtension();
+    mCurrentFactoryIndex = -1;
+    mCurrentUserFile = file;
+    rememberSnapState();
     return true;
 }
 
@@ -765,16 +925,27 @@ void LiftXAudioProcessor::initPreset()
     for (int i = 0; i < RiserEngine::kNumOscs; ++i)
         clearCustomWavetable(i);
     mCurrentPresetName = "Init";
+    mCurrentFactoryIndex = -1;
+    mCurrentUserFile = juce::File();
+    rememberSnapState();   // Init自体は自動スナップの対象外
 }
 
 void LiftXAudioProcessor::loadFactoryPreset(int index)
 {
+    if (index < 0 || index >= FactoryPresets::count())
+        return;
     FactoryPresets::apply(*this, index);
     mCurrentPresetName = FactoryPresets::nameOf(index);
+    mCurrentFactoryIndex = index;
+    mCurrentUserFile = juce::File();
+    // プリセットが持つStart/Endキーを尊重する (読み込み直後に勝手にスナップしない)
+    rememberSnapState();
 }
 
 void LiftXAudioProcessor::stepPreset(int delta)
 {
+    if (delta == 0) return;
+
     struct Entry
     {
         bool factory;
@@ -784,7 +955,8 @@ void LiftXAudioProcessor::stepPreset(int delta)
     };
     std::vector<Entry> list;
 
-    for (int i = 0; i < FactoryPresets::count(); ++i)
+    const int nFactory = FactoryPresets::count();
+    for (int i = 0; i < nFactory; ++i)
         list.push_back({ true, i, {}, FactoryPresets::nameOf(i) });
 
     auto files = getUserPresetDir().findChildFiles(juce::File::findFiles, true, "*.xml");
@@ -795,12 +967,28 @@ void LiftXAudioProcessor::stepPreset(int delta)
         list.push_back({ false, -1, f, f.getFileNameWithoutExtension() });
 
     if (list.empty()) return;
-
-    int cur = -1;
-    for (int i = 0; i < (int)list.size(); ++i)
-        if (list[(size_t)i].name == mCurrentPresetName) { cur = i; break; }
-
     const int n = (int)list.size();
+
+    // 現在位置の特定:
+    //  1) 直前に読み込んだ実体 (Factoryインデックス / Userファイル) を優先。
+    //     → Factory と User で同名プリセットがあってもナビゲーションが破綻しない。
+    //  2) 見つからなければ名前一致でフォールバック (ステート復元直後など)。
+    int cur = -1;
+    if (mCurrentFactoryIndex >= 0 && mCurrentFactoryIndex < nFactory)
+    {
+        cur = mCurrentFactoryIndex;
+    }
+    else if (mCurrentUserFile != juce::File())
+    {
+        for (int i = nFactory; i < n; ++i)
+            if (list[(size_t)i].file == mCurrentUserFile) { cur = i; break; }
+    }
+    if (cur < 0)
+    {
+        for (int i = 0; i < n; ++i)
+            if (list[(size_t)i].name == mCurrentPresetName) { cur = i; break; }
+    }
+
     const int next = (cur < 0) ? (delta > 0 ? 0 : n - 1)
                                : ((cur + delta) % n + n) % n;
 

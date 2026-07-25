@@ -16,6 +16,9 @@
 class PresetPanel : public juce::Component
 {
 public:
+    // Closeボタン → エディタがMAINタブへ戻す
+    std::function<void()> onClose;
+
     explicit PresetPanel(LiftXAudioProcessor& p)
         : proc(p), browser(LiftXAudioProcessor::getUserPresetDir())
     {
@@ -46,7 +49,11 @@ public:
             proc.initPreset();
             updateCurrentLabel();
         };
-        // タブ常設のため Close は不要 → コールバック未設定 (ボタンは残るが何もしない)
+        browser.onClose = [this]
+        {
+            if (onClose != nullptr)
+                onClose();   // MAINタブへ戻る
+        };
 
         addAndMakeVisible(browser);
 

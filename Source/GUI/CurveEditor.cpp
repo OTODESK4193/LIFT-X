@@ -85,8 +85,11 @@ juce::StringArray CurveEditor::factoryCurveNames()
 {
     return { "Linear Up", "Linear Down", "Exp Up (Soft)", "Exp Up (Hard)", "Log Up",
              "Exp Down", "Log Down", "S-Curve Up", "S-Curve Down", "Ramp + Hold",
-             "Hold + Ramp", "Triangle", "V Shape", "Steps 4", "Steps 8",
-             "Saw 4", "Pulse 8", "Zigzag Up", "Flat Center", "Flat Max" };
+             "Hold + Ramp", "Triangle", "V Shape",
+             "Steps 4", "Steps 8", "Steps 16", "Steps 32",
+             "Saw 4", "Saw 8", "Saw 16", "Saw 32",
+             "Pulse 4", "Pulse 8", "Pulse 16", "Pulse 32",
+             "Zigzag Up", "Flat Center", "Flat Max" };
 }
 
 CurveSnapshot CurveEditor::makeFactoryCurve(int id)
@@ -96,6 +99,38 @@ CurveSnapshot CurveEditor::makeFactoryCurve(int id)
     {
         if (s.numPoints < CurveSnapshot::kMaxPoints)
             s.pts[(size_t)s.numPoints++] = { x, y, c };
+    };
+
+    // 分割系ジェネレーター (n分割, eps=段差の立ち上がり幅)
+    auto steps = [&add](int n)
+    {
+        const float eps = juce::jmin(0.01f, 0.25f / (float)n);
+        for (int k = 0; k < n; ++k)
+        {
+            const float lv = (float)k / (float)(n - 1);
+            add((float)k / (float)n, lv);
+            add((float)(k + 1) / (float)n - eps, lv);
+        }
+        add(1, 1);
+    };
+    auto saw = [&add](int n)
+    {
+        const float eps = juce::jmin(0.01f, 0.25f / (float)n);
+        for (int k = 0; k < n; ++k)
+        {
+            add((float)k / (float)n, 0);
+            add((float)(k + 1) / (float)n - eps, 1);
+        }
+    };
+    auto pulse = [&add](int n)
+    {
+        const float eps = juce::jmin(0.01f, 0.25f / (float)n);
+        for (int k = 0; k < n; ++k)
+        {
+            const float lv = (k % 2 == 0) ? 1.0f : 0.0f;
+            add((float)k / (float)n, lv);
+            add((float)(k + 1) / (float)n - eps, lv);
+        }
     };
 
     switch (id)
@@ -113,40 +148,23 @@ CurveSnapshot CurveEditor::makeFactoryCurve(int id)
     case 10: add(0, 0);        add(0.4f, 0, 0.5f); add(1, 1); break;   // Hold+Ramp
     case 11: add(0, 0);        add(0.5f, 1); add(1, 0); break;         // Triangle
     case 12: add(0, 1);        add(0.5f, 0); add(1, 1); break;         // V Shape
-    case 13: // Steps 4
-        for (int k = 0; k < 4; ++k)
-        {
-            add((float)k * 0.25f, (float)k / 3.0f);
-            add((float)(k + 1) * 0.25f - 0.02f, (float)k / 3.0f);
-        }
-        add(1, 1);
-        break;
-    case 14: // Steps 8
-        for (int k = 0; k < 8; ++k)
-        {
-            add((float)k * 0.125f, (float)k / 7.0f);
-            add((float)(k + 1) * 0.125f - 0.01f, (float)k / 7.0f);
-        }
-        add(1, 1);
-        break;
-    case 15: // Saw 4
-        add(0, 0); add(0.24f, 1); add(0.25f, 0); add(0.49f, 1);
-        add(0.5f, 0); add(0.74f, 1); add(0.75f, 0); add(1, 1);
-        break;
-    case 16: // Pulse 8
-        for (int k = 0; k < 8; ++k)
-        {
-            const float lv = (k % 2 == 0) ? 1.0f : 0.0f;
-            add((float)k * 0.125f, lv);
-            add((float)(k + 1) * 0.125f - 0.01f, lv);
-        }
-        add(1, 0);
-        break;
-    case 17: // Zigzag Up
+    case 13: steps(4);  break;
+    case 14: steps(8);  break;
+    case 15: steps(16); break;
+    case 16: steps(32); break;
+    case 17: saw(4);  break;
+    case 18: saw(8);  break;
+    case 19: saw(16); break;
+    case 20: saw(32); break;
+    case 21: pulse(4);  break;
+    case 22: pulse(8);  break;
+    case 23: pulse(16); break;
+    case 24: pulse(32); break;
+    case 25: // Zigzag Up
         add(0, 0); add(0.2f, 0.5f); add(0.4f, 0.25f);
         add(0.6f, 0.75f); add(0.8f, 0.5f); add(1, 1);
         break;
-    case 18: add(0, 0.5f); add(1, 0.5f); break;                        // Flat Center
+    case 26: add(0, 0.5f); add(1, 0.5f); break;                        // Flat Center
     default: add(0, 1);    add(1, 1); break;                           // Flat Max
     }
 
@@ -180,12 +198,13 @@ void CurveEditor::showPresetMenu()
     m.addSeparator();
     m.addItem(100, "Save Current...");
 
+    const int numFactory = names.size();
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&presetBtn),
-        [this, files](int result)
+        [this, files, numFactory](int result)
         {
             if (result == 0) return;
 
-            if (result >= 1 && result <= 20)
+            if (result >= 1 && result <= numFactory)
             {
                 setSnapshot(makeFactoryCurve(result - 1));
                 notify();

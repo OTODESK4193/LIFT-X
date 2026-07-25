@@ -25,6 +25,7 @@
 #include "Wavetable.h"
 #include "CurveData.h"
 #include "ZdfFilter.h"
+#include "ScaleQuantizer.h"
 
 class RiserEngine
 {
@@ -47,6 +48,11 @@ public:
         float lift = 1.0f;
         bool  liftAuto = false;
 
+        // ---- Pitch ENV スケール量子化 (Key/Scale はグローバル, 適用可否はOSC毎) ----
+        bool scaleOn = false;    // マスターOn/Off (Configタブ)
+        int  scaleKey = 0;       // 0..11 (C..B)
+        int  scaleType = 1;      // ScaleQuantizer::getScales() のインデックス
+
         struct Osc
         {
             bool  on = false;
@@ -61,6 +67,7 @@ public:
             float spread = 0.7f;
             int   keyStart = 36;     // C2
             int   keyEnd = 84;       // C6
+            bool  scaleQ = true;     // このOSCにスケール量子化を適用するか
         };
         std::array<Osc, kNumOscs> osc;
 
@@ -97,14 +104,44 @@ public:
 
     void prepare(double sampleRate) noexcept
     {
-        sr = sampleRate;
+        sr = juce::jmax(8000.0, sampleRate);
         for (auto& row : filters)
             for (auto& f : row)
-                f.prepare(sampleRate);
-        noiseFilter.prepare(sampleRate);
+                f.prepare(sr);
+        noiseFilter.prepare(sr);
         noiseFilter.setType(TptSvf::BandPass);
-        smCoef = 1.0f - std::exp(-1.0f / (0.004f * (float)sr));      // τ≒4ms (サンプル単位平滑)
-        declickCoef = 1.0f - std::exp(-1.0f / (0.002f * (float)sr)); // τ≒2ms (リトリガーデクリック)
+
+        // ---- サンプル単位平滑 ----
+        smCoef      = 1.0f - std::exp(-1.0f / (0.004f  * (float)sr)); // τ≒4ms (通常ピッチ/レベル)
+        smCoefFast  = 1.0f - std::exp(-1.0f / (0.0012f * (float)sr)); // τ≒1.2ms (スケール量子化時のピッチ)
+        declickCoef = 1.0f - std::exp(-1.0f / (0.002f  * (float)sr)); // τ≒2ms (リトリガーデクリック)
+
+        // ---- コントロールティック単位平滑 (SR非依存化) ----
+        //  従来は固定係数 (0.3/0.35/0.5) だったため、ティック間隔が短くなる
+        //  高SR (96/192kHz) では時定数が最大4.4倍速くなり、44.1kHzと音が変わっていた。
+        //  ここで実時間の時定数から係数を算出し、全SRで同一挙動にする。
+        //  (44.1kHz での従来値と一致する τ を採用)
+        const double tickRate = sr / (double)kCtrlInterval;   // ティック/秒
+        auto tickCoef = [tickRate](double tauSec) noexcept
+        {
+            return (float)(1.0 - std::exp(-1.0 / (juce::jmax(1.0e-5, tauSec) * tickRate)));
+        };
+        liftTickCoef = tickCoef(0.00242);   // 旧 0.30 @44.1k
+        modTickCoef  = tickCoef(0.00207);   // 旧 0.35 @44.1k
+        cutTickCoef  = tickCoef(0.00145);   // 旧 0.50 @44.1k
+
+        // ---- ノイズ: 固定44.1kHz仮想レートでの生成 (スペクトルをSR非依存化) ----
+        //  Pink(Kellett)/Brown の係数は44.1kHz設計。高SRでそのまま回すと
+        //  折れ点が周波数軸上で持ち上がり「明るいピンク/ブラウン」になってしまう。
+        //  White も帯域がNyquistまで広がるため可聴帯域のパワーが下がる。
+        //  → 生成を44.1kHz固定クロックで行い、線形補間でホストSRへ引き伸ばす。
+        //    sr==44100 のときは step==1 で従来と完全に同一挙動。
+        noiseStep = (float)(kNoiseBaseRate / sr);
+        //  線形補間による分散低下 (オーバーサンプル時 2/3 に漸近) を補正
+        const float varFactor = juce::jlimit(0.05f, 1.0f,
+            juce::jmin(1.0f, noiseStep) + (1.0f - juce::jmin(1.0f, noiseStep)) * (2.0f / 3.0f));
+        noiseInterpGain = 1.0f / std::sqrt(varFactor);
+
         hardReset();
     }
 
@@ -129,14 +166,19 @@ public:
         detSm.fill(12.0f);
         sprSm.fill(0.7f);
         resSm.fill(0.9f);
+        cutSm.fill(1000.0f);
         noiseResSm = 2.0f;
+        noiseCutSm = 500.0f;
         for (auto& row : filters)
             for (auto& f : row)
                 f.reset();
         noiseFilter.reset();
         pinkB.fill(0.0f);
         brownState = 0.0f;
+        noisePhase = 0.0f;
+        noiseCur = noiseNext = 0.0f;
         uiProgress.store(0.0f, std::memory_order_relaxed);
+        for (auto& u : uiPitch) u.store(60.0f, std::memory_order_relaxed);
     }
 
     // ---- MIDI ----
@@ -199,6 +241,16 @@ public:
 
     std::atomic<float> uiProgress { 0.0f };
 
+    // ---- GUI用ライブピッチ (PITCH RAIL表示) ----
+    //  OSC毎の平滑後の絶対ピッチ (MIDIノート番号, 小数)。発音していないときは
+    //  カーブ評価位置に対応する「静止ピッチ」を返すため、LIFT MANUALでノブを
+    //  動かすだけでも表示が追従する。
+    std::array<std::atomic<float>, kNumOscs> uiPitch { };
+    float getUiPitch(int osc) const noexcept
+    {
+        return uiPitch[(size_t)juce::jlimit(0, kNumOscs - 1, osc)].load(std::memory_order_relaxed);
+    }
+
     // ---- レンダリング (L/R は加算ミックス) ----
     void render(float* outL, float* outR, int numSamples, const Params& p,
                 const CurveStore& curves) noexcept
@@ -209,6 +261,10 @@ public:
         {
             if (progress > 0.0) { progress = 0.0; uiProgress.store(0.0f, std::memory_order_relaxed); }
             ampEnv = 0.0f;
+            // 発音していなくてもGUIのPITCH RAILを追従させるため、
+            // ブロックあたり1回だけコントロールティックを回してターゲットを更新する。
+            // (音は出さないので出力バッファには一切書き込まない)
+            controlTick(p, curves);
             return;
         }
 
@@ -248,7 +304,10 @@ public:
 
                 const auto& po = p.osc[(size_t)o];
 
-                pitchSm[(size_t)o] += smCoef * (pitchTarget[(size_t)o] - pitchSm[(size_t)o]);
+                // スケール量子化時はステップ感を出すため速い時定数 (τ≒1.2ms) を使う。
+                // クリック防止には十分な長さを確保している。
+                const float pCoef = pitchQuant[(size_t)o] ? smCoefFast : smCoef;
+                pitchSm[(size_t)o] += pCoef * (pitchTarget[(size_t)o] - pitchSm[(size_t)o]);
                 levelSm[(size_t)o] += smCoef * (levelTarget[(size_t)o] - levelSm[(size_t)o]);
                 if (levelSm[(size_t)o] <= 0.0002f && levelTarget[(size_t)o] <= 0.0001f) continue;
 
@@ -328,7 +387,7 @@ private:
         if (snapNext)
             liftSm = posTarget;   // ノートオン直後は評価位置も即スナップ (開始チャープ防止)
         else
-            liftSm += 0.3f * (posTarget - liftSm);
+            liftSm += liftTickCoef * (posTarget - liftSm);
         const float evalPos = liftSm;
 
         // バイポーラ偏差 (-1..1)
@@ -347,10 +406,20 @@ private:
             const auto& po = p.osc[(size_t)o];
 
             // PITCH: StartKey→EndKey のユニポーラ補間 (+COARSE)
+            //  Scaleクオンタイズ ON かつ当該OSCが有効なら、COARSE加算「前」の
+            //  絶対ピッチをスケール構成音へスナップする。
+            //  (COARSEを後で足すことで、OSC2を+12stしたときの相対関係が保たれる)
             const float ky = uni(CurveStore::oscCurve(o, 0));
-            pitchTarget[(size_t)o] = (float)po.keyStart
-                                   + ((float)po.keyEnd - (float)po.keyStart) * ky
-                                   + po.coarse;
+            float basePitch = (float)po.keyStart
+                            + ((float)po.keyEnd - (float)po.keyStart) * ky;
+            const bool quant = p.scaleOn && po.scaleQ;
+            if (quant)
+                basePitch = ScaleQuantizer::quantize(basePitch, p.scaleKey, p.scaleType);
+            pitchTarget[(size_t)o] = basePitch + po.coarse;
+            pitchQuant[(size_t)o] = quant;
+
+            // GUI (PITCH RAIL) へライブピッチを公開
+            uiPitch[(size_t)o].store(pitchTarget[(size_t)o], std::memory_order_relaxed);
 
             // LEVEL: バイポーラ加算・フルレンジ (中央=ノブ値, 上端=MAX方向, 下端=MIN方向)
             //  ノブ0で下方向へ描いても変化なし (クランプ)。上端は必ずMAXへ到達可能。
@@ -362,8 +431,9 @@ private:
                 po.detune + bip(CurveStore::oscCurve(o, 2)) * 100.0f);
             const float sprTgt = juce::jlimit(0.0f, 1.0f,
                 po.spread + bip(CurveStore::oscCurve(o, 3)) * 1.0f);
-            detSm[(size_t)o] += 0.35f * (detTgt - detSm[(size_t)o]);
-            sprSm[(size_t)o] += 0.35f * (sprTgt - sprSm[(size_t)o]);
+            detSm[(size_t)o] += modTickCoef * (detTgt - detSm[(size_t)o]);
+            sprSm[(size_t)o] += modTickCoef * (sprTgt - sprSm[(size_t)o]);
+            if (snapNext) { detSm[(size_t)o] = detTgt; sprSm[(size_t)o] = sprTgt; }
             const float detEff = detSm[(size_t)o];
             const float sprEff = sprSm[(size_t)o];
 
@@ -381,16 +451,21 @@ private:
 
         // ノイズ: PITCH (バイポーラoct) / LEVEL / RES
         {
-            const float target = p.noisePitch
-                * std::exp2(bip(CurveStore::NoisePitch) * p.noiseRangeOct);
-            noiseCutSm += 0.5f * (target - noiseCutSm);
+            // 20Hz..Nyquist手前へクランプ (平滑器が極端な値を保持しないように)
+            const float target = juce::jlimit(20.0f, (float)(sr * 0.45),
+                p.noisePitch * std::exp2(bip(CurveStore::NoisePitch) * p.noiseRangeOct));
+            noiseCutSm += cutTickCoef * (target - noiseCutSm);
 
             levelTarget[3] = juce::jlimit(0.0f, 1.0f,
                 p.noiseLevel + bip(CurveStore::NoiseLevel) * 1.0f);
 
             const float resTgt = juce::jlimit(0.5f, 12.0f,
                 p.noiseRes + bip(CurveStore::NoiseRes) * 11.5f);
-            noiseResSm += 0.35f * (resTgt - noiseResSm);
+            noiseResSm += modTickCoef * (resTgt - noiseResSm);
+
+            // ノートオン直後はターゲットへスナップ (前ノートの残値からのスイープ防止)
+            if (snapNext) { noiseCutSm = target; noiseResSm = resTgt; }
+
             noiseFilter.setCoef(noiseCutSm, noiseResSm);
         }
 
@@ -399,10 +474,14 @@ private:
         for (int j = 0; j < kNumFilters; ++j)
         {
             if (!p.flt[(size_t)j].on) continue;
-            const float target = p.flt[(size_t)j].cutoff
-                * std::exp2(p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j) * 10.0f);
-            cutSm[(size_t)j] += 0.5f * (target - cutSm[(size_t)j]);
-            resSm[(size_t)j] += 0.35f * (p.flt[(size_t)j].res - resSm[(size_t)j]);
+            const float target = juce::jlimit(20.0f, (float)(sr * 0.45),
+                p.flt[(size_t)j].cutoff
+                * std::exp2(p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j) * 10.0f));
+            cutSm[(size_t)j] += cutTickCoef * (target - cutSm[(size_t)j]);
+            resSm[(size_t)j] += modTickCoef * (p.flt[(size_t)j].res - resSm[(size_t)j]);
+
+            // ノートオン直後はスナップ (前ノート終端のカットオフからのグライド防止)
+            if (snapNext) { cutSm[(size_t)j] = target; resSm[(size_t)j] = p.flt[(size_t)j].res; }
 
             for (int s = 0; s < kNumSources; ++s)
             {
@@ -423,7 +502,24 @@ private:
     }
 
     // ---- ノイズジェネレーター ----
+    //  内部は 44.1kHz 固定の仮想クロックで生成し、線形補間でホストSRへ伸ばす。
+    //  これにより Pink/Brown のスペクトル形状と White の可聴帯域パワーが
+    //  44.1 / 48 / 88.2 / 96 / 176.4 / 192kHz で完全に一致する。
+    //  sr == 44100 のときは step == 1 となり、旧実装と同一の出力になる。
     inline float nextNoise(int type) noexcept
+    {
+        noisePhase += noiseStep;
+        while (noisePhase >= 1.0f)
+        {
+            noisePhase -= 1.0f;
+            noiseCur = noiseNext;
+            noiseNext = genNoise(type);
+        }
+        return (noiseCur + (noiseNext - noiseCur) * noisePhase) * noiseInterpGain;
+    }
+
+    // 44.1kHz 基準の 1サンプル生成
+    inline float genNoise(int type) noexcept
     {
         rngState ^= rngState << 13;
         rngState ^= rngState >> 17;
@@ -478,15 +574,22 @@ private:
 
     std::array<float, kNumOscs> pitchTarget {};
     std::array<float, kNumOscs> pitchSm {};
+    std::array<bool,  kNumOscs> pitchQuant { false, false, false };
     std::array<float, kNumSources> levelTarget {};
     std::array<float, kNumSources> levelSm {};
     std::array<float, kNumOscs> posSm {};
     std::array<float, kNumOscs> detSm {};
     std::array<float, kNumOscs> sprSm {};
     float smCoef = 0.01f;
+    float smCoefFast = 0.03f;
     float declickCoef = 0.02f;
     float declickGain = 1.0f;
     float liftSm = 1.0f;
+
+    // コントロールティック平滑係数 (prepare() でSRから算出)
+    float liftTickCoef = 0.30f;
+    float modTickCoef  = 0.35f;
+    float cutTickCoef  = 0.50f;
 
     // [フィルター][ソース] = 16基 (ソース別ルーティング用)
     std::array<std::array<TptSvf, kNumSources>, kNumFilters> filters;
@@ -497,9 +600,15 @@ private:
     float noiseCutSm = 500.0f;
     float noiseResSm = 2.0f;
 
+    // ノイズ: 44.1kHz固定クロック生成 + 線形補間 (SR非依存化)
+    static constexpr double kNoiseBaseRate = 44100.0;
     juce::uint32 rngState = 0x9e3779b9;
     std::array<float, 7> pinkB {};
     float brownState = 0.0f;
+    float noiseStep = 1.0f;
+    float noisePhase = 0.0f;
+    float noiseCur = 0.0f, noiseNext = 0.0f;
+    float noiseInterpGain = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE(RiserEngine)
 };

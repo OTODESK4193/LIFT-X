@@ -1,14 +1,16 @@
 // ==========================================
 // File: ConfigPanel.h
-// CONFIGタブ: マスターリミッター設定 / カラーテーマ (Granular参照)
+// CONFIGタブ: PITCH ENV スケール量子化 / マスターリミッター設定 / カラーテーマ
 // ==========================================
 #pragma once
 
 #include <JuceHeader.h>
+#include <array>
 #include <memory>
 #include <vector>
 
 #include "../PluginProcessor.h"
+#include "../DSP/ScaleQuantizer.h"
 #include "ValueKnob.h"
 #include "GlowToggle.h"
 #include "ColorPalette.h"
@@ -19,6 +21,77 @@ public:
     explicit ConfigPanel(LiftXAudioProcessor& p)
         : proc(p)
     {
+        // ================= PITCH ENV スケール量子化 =================
+        scaleOn = std::make_unique<GlowToggle>("SCALE QUANTIZE", LiftColors::accentOsc);
+        addAndMakeVisible(*scaleOn);
+        btnAtts.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            proc.apvts, "scaleOn", *scaleOn));
+
+        setupLabel(keyLabel, "KEY");
+        setupLabel(scaleLabel, "SCALE");
+        setupLabel(oscApplyLabel, "APPLY TO");
+
+        {
+            juce::StringArray keys;
+            for (int i = 0; i < 12; ++i) keys.add(ScaleQuantizer::keyName(i));
+            keyBox.addItemList(keys, 1);
+            addAndMakeVisible(keyBox);
+            comboAtts.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+                proc.apvts, "scaleKey", keyBox));
+        }
+        {
+            // 70種あるためカテゴリ見出しでグループ化する。
+            // 見出し (addSectionHeading) はアイテムとして数えられないため、
+            // ComboBoxAttachment のインデックス対応は崩れない。
+            const auto& scales = ScaleQuantizer::getScales();
+            struct Group { const char* head; int count; };
+            static const Group groups[] = {
+                { "BASIC",              16 },
+                { "MODES & VARIANTS",   15 },
+                { "WORLD",               9 },
+                { "INDIAN",              4 },
+                { "JAPAN / ASIA",       10 },
+                { "SYMMETRIC / BEBOP",   7 },
+                { "CHORD TONES",         9 },
+            };
+
+            int id = 1;
+            for (const auto& g : groups)
+            {
+                scaleBox.addSectionHeading(g.head);
+                for (int k = 0; k < g.count && id <= (int)scales.size(); ++k, ++id)
+                    scaleBox.addItem(scales[(size_t)(id - 1)].name, id);
+            }
+            // 想定外のグループ合計ズレに備えた保険 (残りを末尾へ追加)
+            for (; id <= (int)scales.size(); ++id)
+                scaleBox.addItem(scales[(size_t)(id - 1)].name, id);
+
+            addAndMakeVisible(scaleBox);
+            comboAtts.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+                proc.apvts, "scaleType", scaleBox));
+        }
+
+        // OSC毎の適用トグル
+        for (int i = 0; i < RiserEngine::kNumOscs; ++i)
+        {
+            oscScale[(size_t)i] = std::make_unique<GlowToggle>("OSC " + juce::String(i + 1),
+                                                              LiftColors::accentOsc);
+            addAndMakeVisible(*oscScale[(size_t)i]);
+            btnAtts.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+                proc.apvts, "osc" + juce::String(i + 1) + "Scale", *oscScale[(size_t)i]));
+        }
+
+        scaleInfo.setFont(juce::Font(juce::FontOptions(11.5f)));
+        scaleInfo.setColour(juce::Label::textColourId, LiftColors::textDim);
+        scaleInfo.setText("OFF: Pitch ENV follows the curve smoothly.   "
+                          "ON: pitch snaps to the nearest note of KEY + SCALE (stepped riser). "
+                          "COARSE is added after quantizing, so octave/interval offsets stay exact.\n"
+                          "Changing KEY / SCALE / APPLY TO also re-snaps each OSC's START and END "
+                          "keys to the closest scale note - you can freely edit them afterwards.",
+                          juce::dontSendNotification);
+        scaleInfo.setJustificationType(juce::Justification::topLeft);
+        addAndMakeVisible(scaleInfo);
+
         // ---- リミッター ----
         limOn = std::make_unique<GlowToggle>("LIMITER ON", LiftColors::accentMaster);
         addAndMakeVisible(*limOn);
@@ -80,23 +153,59 @@ public:
 
         g.setColour(LiftColors::textDim);
         g.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
+        g.drawText("PITCH ENV - SCALE", scaleArea.getX(), scaleArea.getY() - 20,
+                   scaleArea.getWidth(), 16, juce::Justification::centredLeft);
         g.drawText("MASTER LIMITER", limArea.getX(), limArea.getY() - 20,
                    limArea.getWidth(), 16, juce::Justification::centredLeft);
         g.drawText("APPEARANCE", themeArea.getX(), themeArea.getY() - 20,
                    themeArea.getWidth(), 16, juce::Justification::centredLeft);
 
         g.setColour(LiftColors::panelLine);
+        g.drawRoundedRectangle(scaleArea.toFloat(), 6.0f, 1.0f);
         g.drawRoundedRectangle(limArea.toFloat(), 6.0f, 1.0f);
         g.drawRoundedRectangle(themeArea.toFloat(), 6.0f, 1.0f);
     }
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced(20, 16);
-        r.removeFromTop(24);
+        auto r = getLocalBounds().reduced(20, 14);
+        r.removeFromTop(20);
+
+        // ---- スケール量子化セクション ----
+        scaleArea = r.removeFromTop(156);
+        {
+            auto sc = scaleArea.reduced(14, 12);
+
+            auto row1 = sc.removeFromTop(26);
+            scaleOn->setBounds(row1.removeFromLeft(190));
+            sc.removeFromTop(10);
+
+            auto row2 = sc.removeFromTop(46);
+            auto keyCol = row2.removeFromLeft(90);
+            keyLabel.setBounds(keyCol.removeFromTop(16));
+            keyBox.setBounds(keyCol.removeFromTop(26).reduced(0, 0).withTrimmedRight(10));
+
+            auto scaleCol = row2.removeFromLeft(240);
+            scaleLabel.setBounds(scaleCol.removeFromTop(16));
+            scaleBox.setBounds(scaleCol.removeFromTop(26).withTrimmedRight(10));
+
+            auto applyCol = row2;
+            oscApplyLabel.setBounds(applyCol.removeFromTop(16));
+            auto tRow = applyCol.removeFromTop(26);
+            for (int i = 0; i < RiserEngine::kNumOscs; ++i)
+            {
+                oscScale[(size_t)i]->setBounds(tRow.removeFromLeft(78));
+                tRow.removeFromLeft(6);
+            }
+
+            sc.removeFromTop(6);
+            scaleInfo.setBounds(sc);
+        }
+
+        r.removeFromTop(26);
 
         // リミッターセクション
-        limArea = r.removeFromTop(180);
+        limArea = r.removeFromTop(172);
         auto lim = limArea.reduced(14, 12);
         limOn->setBounds(lim.removeFromTop(26).removeFromLeft(150));
         lim.removeFromTop(8);
@@ -109,22 +218,30 @@ public:
         relKnob.setBounds(c2.reduced(4));
         limInfo.setBounds(knobRow.reduced(8, 30));
 
-        r.removeFromTop(36);
+        r.removeFromTop(26);
 
         // テーマセクション
-        themeArea = r.removeFromTop(110);
-        auto th = themeArea.reduced(14, 12);
+        themeArea = r.removeFromTop(104);
+        auto th = themeArea.reduced(14, 10);
         themeLabel.setBounds(th.removeFromTop(18));
         th.removeFromTop(4);
         themeBox.setBounds(th.removeFromTop(26).removeFromLeft(220));
-        th.removeFromTop(8);
+        th.removeFromTop(6);
         themeBanner.setBounds(th.removeFromTop(20));
 
-        r.removeFromTop(16);
+        r.removeFromTop(10);
         verInfo.setBounds(r.removeFromTop(20));
     }
 
 private:
+    void setupLabel(juce::Label& l, const juce::String& text)
+    {
+        l.setText(text, juce::dontSendNotification);
+        l.setFont(juce::Font(juce::FontOptions(11.5f, juce::Font::bold)));
+        l.setColour(juce::Label::textColourId, LiftColors::textDim);
+        addAndMakeVisible(l);
+    }
+
     void setupKnob(ValueKnob& k, juce::Label& l, const juce::String& text, const juce::String& paramId)
     {
         k.setSliderStyle(juce::Slider::RotaryVerticalDrag);
@@ -145,6 +262,12 @@ private:
 
     LiftXAudioProcessor& proc;
 
+    // ---- スケール量子化 ----
+    std::unique_ptr<GlowToggle> scaleOn;
+    std::array<std::unique_ptr<GlowToggle>, RiserEngine::kNumOscs> oscScale;
+    juce::ComboBox keyBox, scaleBox;
+    juce::Label keyLabel, scaleLabel, oscApplyLabel, scaleInfo;
+
     std::unique_ptr<GlowToggle> limOn;
     ValueKnob ceilKnob, relKnob;
     juce::Label ceilLabel, relLabel, limInfo;
@@ -152,10 +275,11 @@ private:
     juce::Label themeLabel, themeBanner, verInfo;
     juce::ComboBox themeBox;
 
-    juce::Rectangle<int> limArea, themeArea;
+    juce::Rectangle<int> scaleArea, limArea, themeArea;
 
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliderAtts;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> btnAtts;
+    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> comboAtts;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ConfigPanel)
 };

@@ -59,6 +59,9 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         setupKnob(oscDet[(size_t)i], "DETUNE", "osc" + n + "Det", LiftColors::IdMint);
         setupKnob(oscSpread[(size_t)i], "SPREAD", "osc" + n + "Spread", LiftColors::IdMint);
 
+        pitchRail[(size_t)i] = std::make_unique<PitchRail>(proc, i);
+        addAndMakeVisible(*pitchRail[(size_t)i]);
+
         addAndMakeVisible(keyStartBtn[(size_t)i]);
         addAndMakeVisible(keyEndBtn[(size_t)i]);
         keyStartBtn[(size_t)i].onClick = [this, i]
@@ -392,11 +395,14 @@ void MainPanel::resized()
         browseRow.removeFromLeft(4);
         rndBtn[(size_t)i].setBounds(browseRow);
 
-        // キー設定 (最下段)
+        // キー設定 (最下段) + その上に Pitch ENV ライブバー
         auto keyRow = col.removeFromBottom(24);
         keyStartBtn[(size_t)i].setBounds(keyRow.removeFromLeft(keyRow.getWidth() / 2 - 2));
         keyRow.removeFromLeft(4);
         keyEndBtn[(size_t)i].setBounds(keyRow);
+        col.removeFromBottom(4);
+
+        pitchRail[(size_t)i]->setBounds(col.removeFromBottom(18));
         col.removeFromBottom(4);
 
         col.removeFromTop(4);
