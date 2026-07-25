@@ -1,0 +1,89 @@
+// ==========================================
+// File: PresetPanel.h
+// PRESETタブ: NextGenKick2のPresetBrowserを常設タブとして統合
+//  - Factory 30種 (Riser/Downer, ジャンル別) + Userプリセット
+//  - サブカテゴリ入力 / プリセット名入力 / ★お気に入り / 検索
+// ==========================================
+#pragma once
+
+#include <JuceHeader.h>
+
+#include "../PluginProcessor.h"
+#include "../FactoryPresets.h"
+#include "PresetBrowser.h"
+#include "ColorPalette.h"
+
+class PresetPanel : public juce::Component
+{
+public:
+    explicit PresetPanel(LiftXAudioProcessor& p)
+        : proc(p), browser(LiftXAudioProcessor::getUserPresetDir())
+    {
+        // Factoryプリセット登録
+        juce::Array<PresetBrowser::FactoryItem> items;
+        const auto& facs = FactoryPresets::items();
+        for (int i = 0; i < (int)facs.size(); ++i)
+            items.add({ facs[(size_t)i].name, facs[(size_t)i].category, i });
+        browser.setFactoryPresets(items);
+
+        browser.onLoad = [this](const juce::File& f)
+        {
+            proc.loadUserPreset(f);
+            updateCurrentLabel();
+        };
+        browser.onLoadFactory = [this](int idx)
+        {
+            proc.loadFactoryPreset(idx);
+            updateCurrentLabel();
+        };
+        browser.onSave = [this](const juce::String& name, const juce::String& subCat)
+        {
+            proc.saveUserPreset(name, subCat);
+            updateCurrentLabel();
+        };
+        browser.onInit = [this]
+        {
+            proc.initPreset();
+            updateCurrentLabel();
+        };
+        // タブ常設のため Close は不要 → コールバック未設定 (ボタンは残るが何もしない)
+
+        addAndMakeVisible(browser);
+
+        currentLabel.setFont(juce::Font(juce::FontOptions(12.5f, juce::Font::bold)));
+        currentLabel.setColour(juce::Label::textColourId, LiftColors::text);
+        currentLabel.setJustificationType(juce::Justification::centredLeft);
+        addAndMakeVisible(currentLabel);
+        updateCurrentLabel();
+    }
+
+    void refresh() { browser.refresh(); updateCurrentLabel(); }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(LiftColors::panel);
+        g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(2.0f), 8.0f);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(12, 10);
+        currentLabel.setBounds(r.removeFromTop(22));
+        r.removeFromTop(4);
+        browser.setBounds(r);
+    }
+
+private:
+    void updateCurrentLabel()
+    {
+        auto name = proc.getCurrentPresetName();
+        if (name.isEmpty()) name = "-";
+        currentLabel.setText("CURRENT PRESET:  " + name, juce::dontSendNotification);
+    }
+
+    LiftXAudioProcessor& proc;
+    PresetBrowser browser;
+    juce::Label currentLabel;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PresetPanel)
+};

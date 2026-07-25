@@ -25,7 +25,7 @@ OscEnvPanel::OscEnvPanel(LiftXAudioProcessor& p)
     }
 
     addAndMakeVisible(editor);
-    editor.setProgressProvider([this] { return proc.getUiProgress(); });
+    editor.setProgressProvider([this] { return proc.getEnvPosition(); });
     editor.onChanged = [this](const CurveSnapshot& s)
     {
         proc.getCurves().publish(curveIndex(), s);

@@ -53,7 +53,7 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
 
     addAndMakeVisible(editor);
     editor.setBipolar(true);
-    editor.setProgressProvider([this] { return proc.getUiProgress(); });
+    editor.setProgressProvider([this] { return proc.getEnvPosition(); });
     editor.onChanged = [this](const CurveSnapshot& s)
     {
         const auto& d = defs()[(size_t)activeFx];
@@ -108,16 +108,14 @@ void FxPanel::timerCallback()
 {
     if (!isVisible()) return;
 
-    const float prog = proc.getUiProgress();
-    const bool autoMode = proc.apvts.getRawParameterValue("liftMode")->load() > 0.5f;
-    const float lift = juce::jlimit(0.0f, 1.0f,
-        autoMode ? prog : proc.apvts.getRawParameterValue("lift")->load());
+    // ENV評価位置: Auto=Progress / Manual=LIFTノブ
+    const float envPos = proc.getEnvPosition();
 
     const auto& curves = proc.getCurves();
     auto upd = [&](Cell& c, const char* paramId, int curveIdx, float halfRange)
     {
         ModBand::update(c.knob, proc.apvts.getParameter(paramId),
-                        curves.read(curveIdx), lift, prog,
+                        curves.read(curveIdx), 1.0f, envPos,
                         [halfRange](float b, float bip) { return b + bip * halfRange; });
     };
 

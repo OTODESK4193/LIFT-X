@@ -15,7 +15,7 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
 
     addAndMakeVisible(editor);
     editor.setBipolar(true);
-    editor.setProgressProvider([this] { return proc.getUiProgress(); });
+    editor.setProgressProvider([this] { return proc.getEnvPosition(); });
     editor.onChanged = [this](const CurveSnapshot& s)
     {
         proc.getCurves().publish(CurveStore::Filter1 + activeSub, s);
@@ -85,13 +85,11 @@ void FilterPanel::timerCallback()
     auto* prm = proc.apvts.getParameter("flt" + n + "Cutoff");
     const float envAmt = proc.apvts.getRawParameterValue("flt" + n + "Env")->load();
 
-    const float prog = proc.getUiProgress();
-    const bool autoMode = proc.apvts.getRawParameterValue("liftMode")->load() > 0.5f;
-    const float lift = juce::jlimit(0.0f, 1.0f,
-        autoMode ? prog : proc.apvts.getRawParameterValue("lift")->load());
+    // ENV評価位置: Auto=Progress / Manual=LIFTノブ
+    const float envPos = proc.getEnvPosition();
 
     ModBand::update(cutoffKnob, prm,
-                    proc.getCurves().read(CurveStore::Filter1 + activeSub), lift, prog,
+                    proc.getCurves().read(CurveStore::Filter1 + activeSub), 1.0f, envPos,
                     [envAmt](float b, float bip) { return b * std::exp2(envAmt * bip * 5.0f); });
 }
 

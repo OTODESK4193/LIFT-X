@@ -125,6 +125,10 @@ private:
     juce::ComboBox noiseTypeBox;
     KnobCell noiseLevel, noisePitch, noiseRes, noiseRange;
 
+    // ---- マスターエリア (ノイズ列の下) ----
+    juce::Label masterTitle;
+    KnobCell ceilCell;   // Limiter Ceiling (masterCell=OUTと並ぶ)
+
     // ---- MIDIラーン ----
     juce::String armedParamId;          // 空=非武装
     juce::TextButton* armedButton = nullptr;

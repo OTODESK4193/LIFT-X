@@ -41,8 +41,11 @@ public:
     // ---- ブロック毎にプロセッサーが収集して渡すパラメーター (POD) ----
     struct Params
     {
+        // LIFT = 全マルチENVの評価位置 (カーブのX座標)
+        //  Manual: ノブ値が評価位置。動かさない限りENVは変化しない
+        //  Auto  : Progress(0→1)が評価位置。ライザーとして自動進行
         float lift = 1.0f;
-        bool  liftAuto = false;   // true: LIFT=Progress連動 (ノブ値は無視)
+        bool  liftAuto = false;
 
         struct Osc
         {
@@ -174,11 +177,12 @@ public:
     void allNotesOff() noexcept { noteHeld = false; }
 
     // ---- トランスポート同期 (ブロック毎・render前) ----
+    //  bars: 1/32〜16小節 (小数対応)
     void syncTransport(bool playing, bool hasPpq, double ppq,
-                       double bpm, double qnPerBar, int bars) noexcept
+                       double bpm, double qnPerBar, double bars) noexcept
     {
         const double safeBpm = (bpm > 20.0 && bpm < 999.0) ? bpm : 120.0;
-        totalQn = juce::jmax(0.25, (double)bars * qnPerBar);
+        totalQn = juce::jmax(0.03125, bars * qnPerBar);
         progInc = (safeBpm / 60.0) / (sr * totalQn);
 
         if (noteHeld && hostSync)
@@ -318,24 +322,24 @@ private:
     // ---- コントロールティック: 全カーブ評価とターゲット更新 ----
     void controlTick(const Params& p, const CurveStore& curves) noexcept
     {
-        const float prog = (float)progress;
+        // ENV評価位置: Auto=Progress / Manual=LIFTノブ (ティックレート平滑)
+        const float posTarget = juce::jlimit(0.0f, 1.0f,
+            p.liftAuto ? (float)progress : p.lift);
+        if (snapNext)
+            liftSm = posTarget;   // ノートオン直後は評価位置も即スナップ (開始チャープ防止)
+        else
+            liftSm += 0.3f * (posTarget - liftSm);
+        const float evalPos = liftSm;
 
-        // LIFT: Auto時はProgress連動。ティックレートで平滑 (段差防止)
-        const float liftTarget = juce::jlimit(0.0f, 1.0f, p.liftAuto ? prog : p.lift);
-        liftSm += 0.3f * (liftTarget - liftSm);
-        const float lift = liftSm;
-
-        // バイポーラ偏差 (-1..1, LIFTで縮小)
-        auto bip = [lift, &curves, prog](int idx) noexcept
+        // バイポーラ偏差 (-1..1)
+        auto bip = [&curves, evalPos](int idx) noexcept
         {
-            const float y = curves.read(idx).evaluate(prog);
-            return (y - 0.5f) * 2.0f * lift;
+            return (curves.read(idx).evaluate(evalPos) - 0.5f) * 2.0f;
         };
-        // ユニポーラ (0..1, LIFT=0で0.5へ収束)
-        auto uni = [lift, &curves, prog](int idx) noexcept
+        // ユニポーラ (0..1)
+        auto uni = [&curves, evalPos](int idx) noexcept
         {
-            const float y = curves.read(idx).evaluate(prog);
-            return 0.5f + (y - 0.5f) * lift;
+            return curves.read(idx).evaluate(evalPos);
         };
 
         for (int o = 0; o < kNumOscs; ++o)

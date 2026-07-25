@@ -1,6 +1,26 @@
 # LIFT-X — Riser MIDI Synthesizer (OTODESK)
 
-ライザー専用MIDIシンセサイザー。JUCE 8.0系 / VST3 + Standalone。v0.2。
+ライザー専用MIDIシンセサイザー。JUCE 8.0系 / VST3 + Standalone。v0.3。
+
+## v0.3 追加機能
+
+- **LIFTノブの新仕様** — LIFT = 全マルチENVの評価位置(カーブのX座標)。
+  - MANUAL: ノブ位置がそのままENV位置。68%で止めればその時点の音を維持し、
+    ノブを動かさない限り変化しない。DAWオートメーション可能。
+  - AUTO: Progress(0→1)がENV位置になり、ノブも連動して動く。
+- **Bars拡張** — 1/32, 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8, 16小節。
+- **録音長の厳密化** — キャプチャは「設定Bar分の本編 + FXテール1.5秒」で確定。
+  鍵盤を押し続けてもBar数を超えて本編が録音されることはない。
+- **MASTERエリア** — ノイズ列の下に OUT(最終音量) + CEILING(リミッター天井)。
+- **マスターリミッター** — SPECTRA8のBrickLimiterを移植(瞬間アタック/レイテンシ0)。
+  CEILING/RELEASE/ON-OFFをパラメーター化。
+- **CONFIGタブ** — リミッター詳細設定 + カラーテーマ10種(Granular移植、
+  グローバル設定に永続化。完全適用はウィンドウ開き直し)。
+- **PRESETタブ** — NextGenKick2の3カラムブラウザを移植。カテゴリ(All/Factory/
+  User/Favorites)、サブカテゴリ入力、プリセット名入力、★お気に入り、検索、
+  右クリック削除に対応。
+- **ファクトリープリセット30種埋め込み** — EDM/Trance/Bass/Techno/Cinematic
+  各5種のライザー + Downer 5種。波形・ノイズ・フィルター・FX・カーブを網羅。
 
 ## v0.2.1 追加機能
 

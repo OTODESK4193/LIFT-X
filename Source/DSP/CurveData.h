@@ -176,12 +176,14 @@ public:
         return names[juce::jlimit(0, kNumCurves - 1, idx)];
     }
 
-    CurveStore()
+    CurveStore() { resetToDefaults(); }
+
+    // デフォルト:
+    //  OSCピッチ = 0→1 上昇 (Start→Endへのライザー)
+    //  ノイズピッチ/フィルター = 中央→上昇
+    //  モジュレーション/FX = 中央フラット (変化なし)
+    void resetToDefaults()
     {
-        // デフォルト:
-        //  OSCピッチ = 0→1 上昇 (Start→Endへのライザー)
-        //  ノイズピッチ/フィルター = 中央→上昇
-        //  モジュレーション/FX = 中央フラット (変化なし)
         for (int i = 0; i < kNumCurves; ++i)
             publish(i, CurveSnapshot::makeDefault(0.5f, 0.5f));
 

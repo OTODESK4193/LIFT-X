@@ -13,6 +13,8 @@
 #include "GUI/OscEnvPanel.h"
 #include "GUI/FilterPanel.h"
 #include "GUI/FxPanel.h"
+#include "GUI/PresetPanel.h"
+#include "GUI/ConfigPanel.h"
 
 // LIFT動作モードのトグル (押すたびに MANUAL ⇔ AUTO 表示が切り替わる)
 //  MANUAL: LIFTノブは手動/DAWオートメーション
@@ -53,7 +55,7 @@ public:
     void resized() override;
 
 private:
-    enum class Tab { Main, OscEnv, Filter, Fx };
+    enum class Tab { Main, OscEnv, Filter, Fx, Preset, Config };
 
     void setActiveTab(Tab t);
     void styleTabButton(juce::TextButton& b, bool active);
@@ -65,6 +67,8 @@ private:
     juce::TextButton oscEnvTabButton { "OSC ENV" };
     juce::TextButton filterTabButton { "FILTER" };
     juce::TextButton fxTabButton     { "FX" };
+    juce::TextButton presetTabButton { "PRESET" };
+    juce::TextButton configTabButton { "CONFIG" };
     Tab activeTab = Tab::Main;
 
     LiftModeButton liftModeButton;
@@ -74,6 +78,8 @@ private:
     OscEnvPanel oscEnvPanel;
     FilterPanel filterPanel;
     FxPanel fxPanel;
+    PresetPanel presetPanel;
+    ConfigPanel configPanel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LiftXAudioProcessorEditor)
 };

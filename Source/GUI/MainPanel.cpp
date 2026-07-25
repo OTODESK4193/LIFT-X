@@ -10,14 +10,13 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     setupKnob(liftCell, "LIFT", "lift", LiftColors::accentMaster);
     setupKnob(attackCell, "ATTACK", "attack", LiftColors::accentMaster);
     setupKnob(releaseCell, "RELEASE", "release", LiftColors::accentMaster);
-    setupKnob(masterCell, "MASTER", "master", LiftColors::accentMaster);
 
     barsLabel.setText("BARS", juce::dontSendNotification);
     barsLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
     barsLabel.setColour(juce::Label::textColourId, LiftColors::textDim);
     barsLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(barsLabel);
-    setupCombo(barsBox, "bars", { "1", "2", "4", "8", "16" });
+    setupCombo(barsBox, "bars", LiftXAudioProcessor::getBarsNames());
 
     addAndMakeVisible(progressStrip);
     addAndMakeVisible(waveStrip);
@@ -101,6 +100,14 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     setupKnob(noiseRes, "RES", "noiseRes", LiftColors::lilac);
     setupKnob(noiseRange, "RANGE", "noiseRange", LiftColors::lilac);
 
+    // ---- マスターエリア (ノイズ列の下): OUT + Limiter CEILING ----
+    masterTitle.setText("MASTER", juce::dontSendNotification);
+    masterTitle.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+    masterTitle.setColour(juce::Label::textColourId, LiftColors::accentMaster);
+    addAndMakeVisible(masterTitle);
+    setupKnob(masterCell, "OUT", "master", LiftColors::accentMaster);
+    setupKnob(ceilCell, "CEILING", "limCeiling", LiftColors::accentMaster);
+
     // ---- ブラウザ (最前面オーバーレイ) ----
     addChildComponent(browser);
     browser.onLoaded = [this]
@@ -147,10 +154,8 @@ void MainPanel::timerCallback()
                                juce::dontSendNotification);
     }
 
-    // ---- マルチENV変化幅のノブ表示 ----
-    const float lift = juce::jlimit(0.0f, 1.0f,
-        autoMode ? prog : proc.apvts.getRawParameterValue("lift")->load());
-    updateModBands(lift, prog);
+    // ---- マルチENV変化幅のノブ表示 (評価位置: Auto=Progress / Manual=LIFTノブ) ----
+    updateModBands(1.0f, proc.getEnvPosition());
 
     // ---- MIDIラーン ----
     const int events = proc.getNoteEventCount();
@@ -343,10 +348,10 @@ void MainPanel::resized()
         barsBox.setBounds(barsArea.removeFromTop(26).reduced(2, 0));
     }
 
-    KnobCell* globals[3] = { &attackCell, &releaseCell, &masterCell };
+    KnobCell* globals[2] = { &attackCell, &releaseCell };
     for (auto* c : globals)
     {
-        auto cell = top.removeFromLeft(86);
+        auto cell = top.removeFromLeft(90);
         c->label.setBounds(cell.removeFromTop(18));
         c->knob.setBounds(cell.reduced(6));
     }
@@ -399,7 +404,7 @@ void MainPanel::resized()
         layoutKnobGrid(col, cells, 6, 2);
     }
 
-    // ノイズ列
+    // ノイズ列 + マスターエリア
     {
         auto col = r.reduced(9, 8);
         auto head = col.removeFromTop(24);
@@ -414,7 +419,13 @@ void MainPanel::resized()
         col.removeFromTop(8);
 
         KnobCell* cells[4] = { &noiseLevel, &noisePitch, &noiseRes, &noiseRange };
-        layoutKnobGrid(col.removeFromTop(col.getHeight() * 3 / 5), cells, 4, 2);
+        layoutKnobGrid(col.removeFromTop(180), cells, 4, 2);
+
+        // MASTER: OUT + CEILING
+        col.removeFromTop(8);
+        masterTitle.setBounds(col.removeFromTop(18));
+        KnobCell* mcells[2] = { &masterCell, &ceilCell };
+        layoutKnobGrid(col.removeFromTop(100), mcells, 2, 2);
     }
 
     // ブラウザ: 下段全体を覆うオーバーレイ

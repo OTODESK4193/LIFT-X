@@ -3,6 +3,7 @@
 // ==========================================
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "FactoryPresets.h"
 
 #include <cstring>
 
@@ -109,7 +110,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
         juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f, attr(pctStr)));
     add(std::make_unique<BoolP>(juce::ParameterID{"liftMode", 1}, "LIFT Auto", false));
     add(std::make_unique<ChoiceP>(juce::ParameterID{"bars", 1}, "Bars",
-        juce::StringArray{"1", "2", "4", "8", "16"}, 2));
+        getBarsNames(), 7)); // デフォルト "4"
     add(std::make_unique<FloatP>(juce::ParameterID{"attack", 1}, "Attack",
         logRange(0.1f, 500.0f), 3.0f, attr(msStr)));
     add(std::make_unique<FloatP>(juce::ParameterID{"release", 1}, "Release",
@@ -232,6 +233,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
     add(std::make_unique<FloatP>(juce::ParameterID{"duckShape", 1}, "Duck Shape",
         juce::NormalisableRange<float>(0.5f, 8.0f), 2.0f, attr(plainStr)));
 
+    // ---- マスターリミッター ----
+    add(std::make_unique<BoolP>(juce::ParameterID{"limOn", 1}, "Limiter On", true));
+    add(std::make_unique<FloatP>(juce::ParameterID{"limCeiling", 1}, "Limiter Ceiling",
+        juce::NormalisableRange<float>(-12.0f, 0.0f, 0.1f), -0.3f, attr(dbStr)));
+    add(std::make_unique<FloatP>(juce::ParameterID{"limRelease", 1}, "Limiter Release",
+        logRange(20.0f, 1000.0f), 120.0f, attr(msStr)));
+
     return { params.begin(), params.end() };
 }
 
@@ -287,6 +295,14 @@ void LiftXAudioProcessor::cacheParameterPointers()
     pRevAmt = p("revAmt");   pRevDecay = p("revDecay"); pRevShimmer = p("revShimmer");
     pRevDamp = p("revDamp"); pRevMod = p("revMod");
     pDuckAmt = p("duckAmt"); pDuckRate = p("duckRate"); pDuckShape = p("duckShape");
+    pLimOn = p("limOn"); pLimCeiling = p("limCeiling"); pLimRelease = p("limRelease");
+}
+
+float LiftXAudioProcessor::getEnvPosition() const noexcept
+{
+    const bool autoMode = pLiftMode->load() > 0.5f;
+    return juce::jlimit(0.0f, 1.0f,
+        autoMode ? mEngine.uiProgress.load(std::memory_order_relaxed) : pLift->load());
 }
 
 // ==========================================================
@@ -299,6 +315,7 @@ void LiftXAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     mEngine.prepare(sampleRate);
     mFx.prepare(sampleRate);
+    mLimiter.prepare(sampleRate);
 
     mScratchR.assign((size_t)mPreparedBlockSize, 0.0f);
 
@@ -396,7 +413,7 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     }
 
     // ---- DAW同期 ----
-    const int bars = barsFromChoice((int)pBars->load());
+    const double bars = barsFromChoice((int)pBars->load());
     mEngine.syncTransport(playing, hasPpq, ppq, bpm, qnPerBar, bars);
 
     // ---- エンジンレンダリング ----
@@ -434,16 +451,30 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     }
     mMasterSm.skip(numSamples);
 
+    // ---- マスターリミッター (最終段) ----
+    if (pLimOn->load() > 0.5f)
+    {
+        mLimiter.setRelease(pLimRelease->load());
+        float* limL = buffer.getWritePointer(0);
+        float* limR = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : limL;
+        mLimiter.process(limL, limR, numSamples,
+                         juce::Decibels::decibelsToGain(pLimCeiling->load()));
+    }
+
     // ---- ライザー出力キャプチャ (プラグイン最終出力 / RT安全: memcpyのみ) ----
     {
         const bool act = mEngine.isNoteActive();
 
         if (noteOnThisBlock)
         {
-            // 新しいライザー開始 → 録音をやり直す
+            // 新しいライザー開始 → 録音をやり直す。
+            // 本編は設定Bar分きっかりで打ち切り、以降はFXテールのみ追加録音する。
             mCapWrite = 0;
             mCapturing = true;
             mTailRemain = -1;
+            const double riserSec = (bars * qnPerBar) * 60.0 / juce::jmax(20.0, bpm);
+            mCapRiserLen = juce::jlimit(256, (int)mCapL.size(),
+                                        (int)(riserSec * mPreparedSampleRate));
             mCapActive.store(true, std::memory_order_relaxed);
         }
 
@@ -461,8 +492,10 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             }
             mCapLenPub.store(mCapWrite, std::memory_order_relaxed);
 
-            // リリース完了後はFXテールを1.5秒だけ録ってから確定
-            if (!act)
+            // 本編終了条件: リリース完了 or 設定Bar分を録り切った (鍵盤保持でも超過しない)
+            // → 以降はFXテールを1.5秒だけ録って確定
+            const bool mainDone = !act || mCapWrite >= mCapRiserLen;
+            if (mainDone)
             {
                 if (mTailRemain < 0)
                     mTailRemain = (int)(mPreparedSampleRate * 1.5);
@@ -473,7 +506,7 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
                 mTailRemain = -1;
             }
 
-            if ((!act && mTailRemain <= 0) || mCapWrite >= cap)
+            if ((mainDone && mTailRemain <= 0) || mCapWrite >= cap)
             {
                 mCapturing = false;
                 mCapActive.store(false, std::memory_order_relaxed);
@@ -545,14 +578,14 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
         fp.type[(size_t)s] = (int)pFxType[(size_t)s]->load();
 
     // マルチENVカーブによるバイポーラ加算変調 (中央=ノブ値, ±レンジ半分)
-    //  LIFT Auto時はProgress自体がLIFTになる (エンジンと同一規則)
-    const float prog = mEngine.getProgressF();
+    //  評価位置: Auto=Progress / Manual=LIFTノブ (エンジンと同一規則)
     const bool liftAuto = pLiftMode->load() > 0.5f;
-    const float lift = juce::jlimit(0.0f, 1.0f, liftAuto ? prog : pLift->load());
-    auto bip = [this, prog, lift](int idx) noexcept
+    const float evalPos = juce::jlimit(0.0f, 1.0f,
+        liftAuto ? mEngine.getProgressF() : pLift->load());
+    auto bip = [this, evalPos](int idx) noexcept
     {
-        const float y = mCurves.read(idx).evaluate(prog);
-        return (y - 0.5f) * 2.0f * lift;
+        const float y = mCurves.read(idx).evaluate(evalPos);
+        return (y - 0.5f) * 2.0f;
     };
     auto c01 = [](float v) noexcept { return juce::jlimit(0.0f, 1.0f, v); };
 
@@ -633,7 +666,7 @@ void LiftXAudioProcessor::clearCustomWavetable(int oscIdx)
 // ==========================================================
 // ステート保存/復元 (APVTS + カーブ + WTパス)
 // ==========================================================
-void LiftXAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
+juce::ValueTree LiftXAudioProcessor::buildStateTree() const
 {
     auto state = apvts.copyState();
 
@@ -641,18 +674,14 @@ void LiftXAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
         if (state.getChild(i).hasType("CURVES"))
             state.removeChild(i, nullptr);
     state.appendChild(mCurves.toValueTree(), nullptr);
-
-    if (auto xml = state.createXml())
-        copyXmlToBinary(*xml, destData);
+    return state;
 }
 
-void LiftXAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
+void LiftXAudioProcessor::applyStateTree(juce::ValueTree state)
 {
-    auto xml = getXmlFromBinary(data, sizeInBytes);
-    if (xml == nullptr || !xml->hasTagName(apvts.state.getType()))
+    if (!state.isValid() || !state.hasType(apvts.state.getType()))
         return;
 
-    auto state = juce::ValueTree::fromXml(*xml);
     mCurves.fromValueTree(state.getChildWithName("CURVES"));
     apvts.replaceState(state);
 
@@ -666,12 +695,87 @@ void LiftXAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
             if (f.existsAsFile())
                 loadCustomWavetable(i, f);
         }
+        else
+        {
+            mWavetables[(size_t)i].clearCustom();
+        }
     }
+}
+
+void LiftXAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
+{
+    if (auto xml = buildStateTree().createXml())
+        copyXmlToBinary(*xml, destData);
+}
+
+void LiftXAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
+{
+    auto xml = getXmlFromBinary(data, sizeInBytes);
+    if (xml == nullptr || !xml->hasTagName(apvts.state.getType()))
+        return;
+    applyStateTree(juce::ValueTree::fromXml(*xml));
+}
+
+// ==========================================================
+// プリセット (メッセージスレッド専用)
+// ==========================================================
+juce::File LiftXAudioProcessor::getUserPresetDir()
+{
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                   .getChildFile("LIFT-X").getChildFile("Presets");
+    dir.createDirectory();
+    return dir;
+}
+
+void LiftXAudioProcessor::saveUserPreset(const juce::String& name, const juce::String& subCategory)
+{
+    auto dir = getUserPresetDir();
+    if (subCategory.isNotEmpty())
+    {
+        dir = dir.getChildFile(juce::File::createLegalFileName(subCategory));
+        dir.createDirectory();
+    }
+    const auto file = dir.getChildFile(juce::File::createLegalFileName(name) + ".xml");
+
+    if (auto xml = buildStateTree().createXml())
+        xml->writeTo(file);
+    mCurrentPresetName = name;
+}
+
+bool LiftXAudioProcessor::loadUserPreset(const juce::File& file)
+{
+    auto xml = juce::parseXML(file);
+    if (xml == nullptr || !xml->hasTagName(apvts.state.getType()))
+        return false;
+    applyStateTree(juce::ValueTree::fromXml(*xml));
+    mCurrentPresetName = file.getFileNameWithoutExtension();
+    return true;
+}
+
+void LiftXAudioProcessor::initPreset()
+{
+    // 全パラメーターをデフォルトへ + カーブ初期化 + カスタムWT解除
+    for (auto* prm : getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*>(prm))
+            rp->setValueNotifyingHost(rp->getDefaultValue());
+
+    mCurves.resetToDefaults();
+    for (int i = 0; i < RiserEngine::kNumOscs; ++i)
+        clearCustomWavetable(i);
+    mCurrentPresetName = "Init";
+}
+
+void LiftXAudioProcessor::loadFactoryPreset(int index)
+{
+    FactoryPresets::apply(*this, index);
+    mCurrentPresetName = FactoryPresets::nameOf(index);
 }
 
 // ==========================================================
 juce::AudioProcessorEditor* LiftXAudioProcessor::createEditor()
 {
+    // カラーテーマをエディタ構築前に適用 (グローバル設定から復元)
+    LiftColors::setTheme(getGlobalSettings().getIntValue("colorTheme", 0));
     return new LiftXAudioProcessorEditor(*this);
 }
 

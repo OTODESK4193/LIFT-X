@@ -19,6 +19,7 @@
 #include "DSP/CurveData.h"
 #include "DSP/RiserEngine.h"
 #include "DSP/FxChain.h"
+#include "DSP/Limiter.h"
 
 class LiftXAudioProcessor : public juce::AudioProcessor
 {
@@ -94,23 +95,44 @@ public:
     static juce::String getGlobalWavetableDir();
     static void setGlobalWavetableDir(const juce::String& path);
 
-    // Bars選択肢 (1,2,4,8,16)
-    static int barsFromChoice(int idx) noexcept
+    // Bars選択肢 (1/32〜16小節)
+    static juce::StringArray getBarsNames()
     {
-        static const int b[5] = { 1, 2, 4, 8, 16 };
-        return b[juce::jlimit(0, 4, idx)];
+        return { "1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16" };
     }
+    static double barsFromChoice(int idx) noexcept
+    {
+        static const double b[10] = { 1.0 / 32.0, 1.0 / 16.0, 1.0 / 8.0, 1.0 / 4.0, 1.0 / 2.0,
+                                      1.0, 2.0, 4.0, 8.0, 16.0 };
+        return b[juce::jlimit(0, 9, idx)];
+    }
+
+    // ENV評価位置 (GUIのプレイヘッド/ModBand用): Auto=Progress / Manual=LIFTノブ
+    float getEnvPosition() const noexcept;
+
+    // ---- プリセット (メッセージスレッド専用) ----
+    static juce::File getUserPresetDir();
+    void saveUserPreset(const juce::String& name, const juce::String& subCategory);
+    bool loadUserPreset(const juce::File& file);
+    void loadFactoryPreset(int index);
+    void initPreset();
+    juce::String getCurrentPresetName() const { return mCurrentPresetName; }
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void cacheParameterPointers();
     void gatherEngineParams(RiserEngine::Params& ep) const noexcept;
     void gatherFxParams(FxChain::Params& fp, double bpm, double ppq, bool playing) const noexcept;
+    void applyStateTree(juce::ValueTree state);   // APVTS+カーブ+WTパスを適用
+    juce::ValueTree buildStateTree() const;       // 現在の全ステートをツリー化
+
+    juce::String mCurrentPresetName;
 
     // ---- DSPモジュール ----
     std::array<MorphWavetable, RiserEngine::kNumOscs> mWavetables;
     RiserEngine mEngine;
     FxChain mFx;
+    BrickLimiter mLimiter;
     CurveStore mCurves;
 
     juce::AudioFormatManager mFormatManager;
@@ -131,6 +153,7 @@ private:
     static constexpr double kMaxCaptureSeconds = 30.0;
     std::vector<float> mCapL, mCapR;
     int mCapWrite = 0;
+    int mCapRiserLen = 0;      // 設定Bar分のサンプル数 (本編はここで打ち切り)
     bool mCapturing = false;
     bool mWasActive = false;
     int mTailRemain = -1;
@@ -174,6 +197,7 @@ private:
     std::atomic<float> *pRevAmt = nullptr, *pRevDecay = nullptr, *pRevShimmer = nullptr,
                        *pRevDamp = nullptr, *pRevMod = nullptr;
     std::atomic<float> *pDuckAmt = nullptr, *pDuckRate = nullptr, *pDuckShape = nullptr;
+    std::atomic<float> *pLimOn = nullptr, *pLimCeiling = nullptr, *pLimRelease = nullptr;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(LiftXAudioProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LiftXAudioProcessor)
