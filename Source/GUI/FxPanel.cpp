@@ -63,41 +63,38 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     hint.setFont(juce::Font(juce::FontOptions(12.0f)));
     hint.setColour(juce::Label::textColourId, LiftColors::textDim);
     hint.setJustificationType(juce::Justification::centredLeft);
-    hint.setText(juce::CharPointer_UTF8(
-        "\xe4\xb8\xad\xe5\xa4\xae=\xe3\x83\x8e\xe3\x83\x96\xe7\x8f\xbe\xe5\x9c\xa8\xe5\x80\xa4 / "
-        "\xe4\xb8\x8a\xe4\xb8\x8b\xe3\x81\xa7\xc2\xb1\xe5\xa4\x89\xe8\xaa\xbf   "
-        "TIME/RATE\xe3\x81\xaf\xc2\xb1""2\xe3\x82\xaa\xe3\x82\xaf\xe3\x82\xbf\xe3\x83\xbc\xe3\x83\x96"
-        " (\xe4\xb8\x8b\xe3\x81\x92\xe3\x82\x8b\xe3\x81\xbb\xe3\x81\xa9\xe5\x8a\xa0\xe9\x80\x9f)"),
-        juce::dontSendNotification);
+    hint.setText("Center = knob value / Top = max / Bottom = min   "
+                 "TIME & RATE: +-2 octaves (lower = faster)",
+                 juce::dontSendNotification);
     addAndMakeVisible(hint);
 
     // ---- 詳細コントロール ----
-    mkKnob(satAmt, "AMT", "satAmt", LiftColors::rose);
+    mkKnob(satAmt, "AMT", "satAmt", LiftColors::IdRose);
     mkCombo(satAlgoBox, satAlgoLabel, "ALGO", "satAlgo", FxChain::getSatAlgoNames());
-    mkKnob(satDrive, "DRIVE", "satDrive", LiftColors::rose);
-    mkKnob(satPre, "PRE HPF", "satPre", LiftColors::rose);
-    mkKnob(satTrim, "TRIM", "satTrim", LiftColors::rose);
+    mkKnob(satDrive, "DRIVE", "satDrive", LiftColors::IdRose);
+    mkKnob(satPre, "PRE HPF", "satPre", LiftColors::IdRose);
+    mkKnob(satTrim, "TRIM", "satTrim", LiftColors::IdRose);
 
-    mkKnob(choAmt, "AMT", "choAmt", LiftColors::mint);
-    mkKnob(choRate, "RATE", "choRate", LiftColors::mint);
-    mkKnob(choDepth, "DEPTH", "choDepth", LiftColors::mint);
-    mkKnob(choWidth, "WIDTH", "choWidth", LiftColors::mint);
+    mkKnob(choAmt, "AMT", "choAmt", LiftColors::IdMint);
+    mkKnob(choRate, "RATE", "choRate", LiftColors::IdMint);
+    mkKnob(choDepth, "DEPTH", "choDepth", LiftColors::IdMint);
+    mkKnob(choWidth, "WIDTH", "choWidth", LiftColors::IdMint);
 
-    mkKnob(dlyAmt, "AMT", "dlyAmt", LiftColors::babyBlue);
+    mkKnob(dlyAmt, "AMT", "dlyAmt", LiftColors::IdBabyBlue);
     mkCombo(dlyTimeBox, dlyTimeLabel, "TIME", "dlyTime", FxChain::getDelayTimeNames());
-    mkKnob(dlyFb, "FB", "dlyFb", LiftColors::babyBlue);
-    mkKnob(dlyDuck, "DUCK", "dlyDuck", LiftColors::babyBlue);
-    mkKnob(dlyDamp, "DAMP", "dlyDamp", LiftColors::babyBlue);
+    mkKnob(dlyFb, "FB", "dlyFb", LiftColors::IdBabyBlue);
+    mkKnob(dlyDuck, "DUCK", "dlyDuck", LiftColors::IdBabyBlue);
+    mkKnob(dlyDamp, "DAMP", "dlyDamp", LiftColors::IdBabyBlue);
 
-    mkKnob(revAmt, "AMT", "revAmt", LiftColors::lavender);
-    mkKnob(revDecay, "DECAY", "revDecay", LiftColors::lavender);
-    mkKnob(revShimmer, "SHIMMER", "revShimmer", LiftColors::lavender);
-    mkKnob(revDamp, "DAMP", "revDamp", LiftColors::lavender);
-    mkKnob(revMod, "MOD", "revMod", LiftColors::lavender);
+    mkKnob(revAmt, "AMT", "revAmt", LiftColors::IdLavender);
+    mkKnob(revDecay, "DECAY", "revDecay", LiftColors::IdLavender);
+    mkKnob(revShimmer, "SHIMMER", "revShimmer", LiftColors::IdLavender);
+    mkKnob(revDamp, "DAMP", "revDamp", LiftColors::IdLavender);
+    mkKnob(revMod, "MOD", "revMod", LiftColors::IdLavender);
 
-    mkKnob(duckAmt, "AMT", "duckAmt", LiftColors::peach);
+    mkKnob(duckAmt, "AMT", "duckAmt", LiftColors::IdPeach);
     mkCombo(duckRateBox, duckRateLabel, "RATE", "duckRate", FxChain::getDuckRateNames());
-    mkKnob(duckShape, "SHAPE", "duckShape", LiftColors::peach);
+    mkKnob(duckShape, "SHAPE", "duckShape", LiftColors::IdPeach);
 
     setFx(0);
     startTimerHz(30);
@@ -119,27 +116,28 @@ void FxPanel::timerCallback()
                         [halfRange](float b, float bip) { return b + bip * halfRange; });
     };
 
+    // フルレンジ加算 (DSPと同一スケール)
     switch (activeFx)
     {
     case 0:
-        upd(satAmt, "satAmt", CurveStore::SatAmt, 0.5f);
-        upd(satDrive, "satDrive", CurveStore::SatDrive, 5.5f);
+        upd(satAmt, "satAmt", CurveStore::SatAmt, 1.0f);
+        upd(satDrive, "satDrive", CurveStore::SatDrive, 11.0f);
         break;
     case 1:
-        upd(choAmt, "choAmt", CurveStore::ChoAmt, 0.5f);
-        upd(choDepth, "choDepth", CurveStore::ChoDepth, 0.5f);
+        upd(choAmt, "choAmt", CurveStore::ChoAmt, 1.0f);
+        upd(choDepth, "choDepth", CurveStore::ChoDepth, 1.0f);
         break;
     case 2:
-        upd(dlyAmt, "dlyAmt", CurveStore::DlyAmt, 0.5f);
-        upd(dlyFb, "dlyFb", CurveStore::DlyFb, 0.475f);
+        upd(dlyAmt, "dlyAmt", CurveStore::DlyAmt, 1.0f);
+        upd(dlyFb, "dlyFb", CurveStore::DlyFb, 0.95f);
         break;
     case 3:
-        upd(revAmt, "revAmt", CurveStore::RevAmt, 0.5f);
-        upd(revShimmer, "revShimmer", CurveStore::RevShimmer, 0.5f);
+        upd(revAmt, "revAmt", CurveStore::RevAmt, 1.0f);
+        upd(revShimmer, "revShimmer", CurveStore::RevShimmer, 1.0f);
         break;
     default:
-        upd(duckAmt, "duckAmt", CurveStore::DuckAmt, 0.5f);
-        upd(duckShape, "duckShape", CurveStore::DuckShape, 3.75f);
+        upd(duckAmt, "duckAmt", CurveStore::DuckAmt, 1.0f);
+        upd(duckShape, "duckShape", CurveStore::DuckShape, 7.5f);
         break;
     }
 }
@@ -212,11 +210,12 @@ void FxPanel::styleTabButton(juce::TextButton& b, bool active, juce::Colour acce
 }
 
 // ==========================================================
-void FxPanel::mkKnob(Cell& c, const juce::String& text, const juce::String& paramId, juce::Colour accent)
+void FxPanel::mkKnob(Cell& c, const juce::String& text, const juce::String& paramId, int accentId)
 {
     c.knob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     c.knob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 15);
-    c.knob.setColour(juce::Slider::rotarySliderFillColourId, accent);
+    c.knob.setColour(juce::Slider::rotarySliderFillColourId, LiftColors::accentById(accentId));
+    c.knob.getProperties().set("accentId", accentId); // テーマ連動
     addAndMakeVisible(c.knob);
 
     c.label.setText(text, juce::dontSendNotification);

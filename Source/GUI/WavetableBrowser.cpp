@@ -66,7 +66,7 @@ void WavetableBrowser::close()
 void WavetableBrowser::chooseFolder()
 {
     mChooser = std::make_unique<juce::FileChooser>(
-        "Wavetableフォルダを選択 (サブフォルダ=カテゴリ)", juce::File());
+        "Select Wavetable folder (subfolders = categories)", juce::File());
     mChooser->launchAsync(juce::FileBrowserComponent::openMode
                         | juce::FileBrowserComponent::canSelectDirectories,
         [this](const juce::FileChooser& fc)

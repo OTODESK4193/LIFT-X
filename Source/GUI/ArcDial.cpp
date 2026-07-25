@@ -43,12 +43,16 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     g.setColour(LiftColors::knobTrack);
     g.drawEllipse(rx, ry, rw, rw, arcThickness);
 
-    const auto baseColourEarly = slider.findColour(juce::Slider::rotarySliderFillColourId);
+    const auto& props = slider.getProperties();
+
+    // アーク色: "accentId" プロパティがあれば現在テーマから解決 (テーマ連動)
+    const int accentId = (int)props.getWithDefault("accentId", -1);
+    const auto baseColour = accentId >= 0
+        ? LiftColors::accentById(accentId)
+        : slider.findColour(juce::Slider::rotarySliderFillColourId);
 
     // 1.5 マルチENVの変調レンジ帯 (Granular ModMatrix方式)
     //     GUI側が mod_active / mod_min / mod_max / mod_live を毎フレーム更新する。
-    //     帯はアーク色より濃い色で描画し、視認性を確保する。
-    const auto& props = slider.getProperties();
     const bool modActive = props.getWithDefault("mod_active", false);
     if (modActive)
     {
@@ -59,9 +63,10 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
 
         if (std::abs(aHi - aLo) > 0.001f)
         {
+            // 変化幅の帯: 白で目立たせる (Granular ModMatrix方式)
             juce::Path band;
             band.addArc(rx, ry, rw, rw, aLo, aHi, true);
-            g.setColour(baseColourEarly.darker(0.55f).withMultipliedSaturation(1.4f));
+            g.setColour(juce::Colours::white.withAlpha(0.55f));
             g.strokePath(band, juce::PathStrokeType(arcThickness + 4.0f,
                          juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
@@ -71,7 +76,6 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     juce::Path p;
     p.addArc(rx, ry, rw, rw, rotaryStartAngle, angle, true);
 
-    const auto baseColour = slider.findColour(juce::Slider::rotarySliderFillColourId);
     const auto lightColour = baseColour.brighter(0.6f);
     const auto darkColour = baseColour.darker(0.35f);
 

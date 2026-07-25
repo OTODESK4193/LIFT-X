@@ -37,6 +37,7 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
         k.setSliderStyle(juce::Slider::RotaryVerticalDrag);
         k.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 62, 14);
         k.setColour(juce::Slider::rotarySliderFillColourId, LiftColors::accentFilter);
+        k.getProperties().set("accentId", (int)LiftColors::IdBabyBlue); // テーマ連動
         addAndMakeVisible(k);
 
         l.setText(text, juce::dontSendNotification);
@@ -65,11 +66,9 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     hint.setFont(juce::Font(juce::FontOptions(12.0f)));
     hint.setColour(juce::Label::textColourId, LiftColors::textDim);
     hint.setJustificationType(juce::Justification::centredLeft);
-    hint.setText(juce::CharPointer_UTF8(
-        "\xe3\x82\xab\xe3\x83\xbc\xe3\x83\x96\xc3\x97""ENV AMT \xe3\x81\xa7\xe3\x82\xab\xe3\x83\x83\xe3\x83\x88\xe3\x82\xaa\xe3\x83\x95\xe3\x82\x92"
-        "\xc2\xb1""5\xe3\x82\xaa\xe3\x82\xaf\xe3\x82\xbf\xe3\x83\xbc\xe3\x83\x96\xe5\xa4\x89\xe8\xaa\xbf (ZDF/TPT: \xe6\x80\xa5\xe6\xbf\x80\xe3\x81\xaa"
-        "\xe3\x82\xb9\xe3\x82\xa4\xe3\x83\xbc\xe3\x83\x97\xe3\x81\xa7\xe3\x82\x82\xe7\xa0\xb4\xe7\xb6\xbb\xe3\x81\x97\xe3\x81\xbe\xe3\x81\x9b\xe3\x82\x93)"),
-        juce::dontSendNotification);
+    hint.setText("Curve x ENV AMT sweeps CUTOFF across the full range "
+                 "(ZDF/TPT: stable even under fast sweeps)",
+                 juce::dontSendNotification);
     addAndMakeVisible(hint);
 
     setSub(0);
@@ -90,7 +89,7 @@ void FilterPanel::timerCallback()
 
     ModBand::update(cutoffKnob, prm,
                     proc.getCurves().read(CurveStore::Filter1 + activeSub), 1.0f, envPos,
-                    [envAmt](float b, float bip) { return b * std::exp2(envAmt * bip * 5.0f); });
+                    [envAmt](float b, float bip) { return b * std::exp2(envAmt * bip * 10.0f); });
 }
 
 void FilterPanel::setSub(int idx)

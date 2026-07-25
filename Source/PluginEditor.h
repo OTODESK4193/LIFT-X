@@ -45,7 +45,8 @@ public:
     }
 };
 
-class LiftXAudioProcessorEditor : public juce::AudioProcessorEditor
+class LiftXAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                  private juce::Timer
 {
 public:
     explicit LiftXAudioProcessorEditor(LiftXAudioProcessor&);
@@ -56,6 +57,8 @@ public:
 
 private:
     enum class Tab { Main, OscEnv, Filter, Fx, Preset, Config };
+
+    void timerCallback() override;
 
     void setActiveTab(Tab t);
     void styleTabButton(juce::TextButton& b, bool active);
@@ -73,6 +76,11 @@ private:
 
     LiftModeButton liftModeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> liftModeAtt;
+
+    // ヘッダー右: プリセットナビゲーション (◀ 名前 ▶)
+    juce::TextButton prevPresetButton { "<" };
+    juce::TextButton nextPresetButton { ">" };
+    juce::Label presetNameLabel;
 
     MainPanel mainPanel;
     OscEnvPanel oscEnvPanel;

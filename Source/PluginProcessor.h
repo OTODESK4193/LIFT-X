@@ -116,6 +116,7 @@ public:
     bool loadUserPreset(const juce::File& file);
     void loadFactoryPreset(int index);
     void initPreset();
+    void stepPreset(int delta);   // ◀▶: Factory+Userの結合リストを順送り
     juce::String getCurrentPresetName() const { return mCurrentPresetName; }
 
 private:
@@ -124,7 +125,7 @@ private:
     void gatherEngineParams(RiserEngine::Params& ep) const noexcept;
     void gatherFxParams(FxChain::Params& fp, double bpm, double ppq, bool playing) const noexcept;
     void applyStateTree(juce::ValueTree state);   // APVTS+カーブ+WTパスを適用
-    juce::ValueTree buildStateTree() const;       // 現在の全ステートをツリー化
+    juce::ValueTree buildStateTree();             // 現在の全ステートをツリー化
 
     juce::String mCurrentPresetName;
 

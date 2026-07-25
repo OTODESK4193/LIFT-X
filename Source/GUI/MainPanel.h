@@ -83,7 +83,7 @@ private:
     void timerCallback() override;
     void updateModBands(float lift, float prog);
     void setupKnob(KnobCell& c, const juce::String& text, const juce::String& paramId,
-                   juce::Colour accent);
+                   int accentId);
     void setupCombo(juce::ComboBox& box, const juce::String& paramId,
                     const juce::StringArray& items);
     void layoutKnobGrid(juce::Rectangle<int> area, KnobCell** cells, int count, int cols);

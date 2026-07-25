@@ -7,9 +7,9 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     : proc(p), progressStrip(p), waveStrip(p), browser(p)
 {
     // ---- グローバル ----
-    setupKnob(liftCell, "LIFT", "lift", LiftColors::accentMaster);
-    setupKnob(attackCell, "ATTACK", "attack", LiftColors::accentMaster);
-    setupKnob(releaseCell, "RELEASE", "release", LiftColors::accentMaster);
+    setupKnob(liftCell, "LIFT", "lift", LiftColors::IdPink);
+    setupKnob(attackCell, "ATTACK", "attack", LiftColors::IdPink);
+    setupKnob(releaseCell, "RELEASE", "release", LiftColors::IdPink);
 
     barsLabel.setText("BARS", juce::dontSendNotification);
     barsLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
@@ -52,12 +52,12 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         browseBtn[(size_t)i].onClick = [this, i] { browser.openFor(i); };
         rndBtn[(size_t)i].onClick = [this, i] { browser.loadRandomFor(i); };
 
-        setupKnob(oscPos[(size_t)i], "POS", "osc" + n + "Pos", LiftColors::accentOsc);
-        setupKnob(oscLevel[(size_t)i], "LEVEL", "osc" + n + "Level", LiftColors::accentOsc);
-        setupKnob(oscCoarse[(size_t)i], "COARSE", "osc" + n + "Coarse", LiftColors::accentOsc);
-        setupKnob(oscUni[(size_t)i], "UNISON", "osc" + n + "Uni", LiftColors::accentOsc);
-        setupKnob(oscDet[(size_t)i], "DETUNE", "osc" + n + "Det", LiftColors::accentOsc);
-        setupKnob(oscSpread[(size_t)i], "SPREAD", "osc" + n + "Spread", LiftColors::accentOsc);
+        setupKnob(oscPos[(size_t)i], "POS", "osc" + n + "Pos", LiftColors::IdMint);
+        setupKnob(oscLevel[(size_t)i], "LEVEL", "osc" + n + "Level", LiftColors::IdMint);
+        setupKnob(oscCoarse[(size_t)i], "COARSE", "osc" + n + "Coarse", LiftColors::IdMint);
+        setupKnob(oscUni[(size_t)i], "UNISON", "osc" + n + "Uni", LiftColors::IdMint);
+        setupKnob(oscDet[(size_t)i], "DETUNE", "osc" + n + "Det", LiftColors::IdMint);
+        setupKnob(oscSpread[(size_t)i], "SPREAD", "osc" + n + "Spread", LiftColors::IdMint);
 
         addAndMakeVisible(keyStartBtn[(size_t)i]);
         addAndMakeVisible(keyEndBtn[(size_t)i]);
@@ -95,18 +95,18 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         proc.apvts, "noiseMute", *noiseMute));
 
     setupCombo(noiseTypeBox, "noiseType", { "White", "Pink", "Brown" });
-    setupKnob(noiseLevel, "LEVEL", "noiseLevel", LiftColors::lilac);
-    setupKnob(noisePitch, "PITCH", "noisePitch", LiftColors::lilac);
-    setupKnob(noiseRes, "RES", "noiseRes", LiftColors::lilac);
-    setupKnob(noiseRange, "RANGE", "noiseRange", LiftColors::lilac);
+    setupKnob(noiseLevel, "LEVEL", "noiseLevel", LiftColors::IdLilac);
+    setupKnob(noisePitch, "PITCH", "noisePitch", LiftColors::IdLilac);
+    setupKnob(noiseRes, "RES", "noiseRes", LiftColors::IdLilac);
+    setupKnob(noiseRange, "RANGE", "noiseRange", LiftColors::IdLilac);
 
     // ---- マスターエリア (ノイズ列の下): OUT + Limiter CEILING ----
     masterTitle.setText("MASTER", juce::dontSendNotification);
     masterTitle.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
     masterTitle.setColour(juce::Label::textColourId, LiftColors::accentMaster);
     addAndMakeVisible(masterTitle);
-    setupKnob(masterCell, "OUT", "master", LiftColors::accentMaster);
-    setupKnob(ceilCell, "CEILING", "limCeiling", LiftColors::accentMaster);
+    setupKnob(masterCell, "OUT", "master", LiftColors::IdPink);
+    setupKnob(ceilCell, "CEILING", "limCeiling", LiftColors::IdPink);
 
     // ---- ブラウザ (最前面オーバーレイ) ----
     addChildComponent(browser);
@@ -198,25 +198,26 @@ void MainPanel::updateModBands(float lift, float prog)
 {
     const auto& curves = proc.getCurves();
 
+    // フルレンジ加算 (中央=ノブ値 / 上端=MAX / 下端=MIN) — DSPと同一スケール
     for (int i = 0; i < 3; ++i)
     {
         ModBand::update(oscLevel[(size_t)i].knob, prmOscLevel[(size_t)i],
                         curves.read(CurveStore::oscCurve(i, 1)), lift, prog,
-                        [](float b, float bip) { return b + bip * 0.5f; });
+                        [](float b, float bip) { return b + bip * 1.0f; });
         ModBand::update(oscDet[(size_t)i].knob, prmOscDet[(size_t)i],
                         curves.read(CurveStore::oscCurve(i, 2)), lift, prog,
-                        [](float b, float bip) { return b + bip * 50.0f; });
+                        [](float b, float bip) { return b + bip * 100.0f; });
         ModBand::update(oscSpread[(size_t)i].knob, prmOscSpread[(size_t)i],
                         curves.read(CurveStore::oscCurve(i, 3)), lift, prog,
-                        [](float b, float bip) { return b + bip * 0.5f; });
+                        [](float b, float bip) { return b + bip * 1.0f; });
     }
 
     ModBand::update(noiseLevel.knob, prmNoiseLevel,
                     curves.read(CurveStore::NoiseLevel), lift, prog,
-                    [](float b, float bip) { return b + bip * 0.5f; });
+                    [](float b, float bip) { return b + bip * 1.0f; });
     ModBand::update(noiseRes.knob, prmNoiseRes,
                     curves.read(CurveStore::NoiseRes), lift, prog,
-                    [](float b, float bip) { return b + bip * 5.75f; });
+                    [](float b, float bip) { return b + bip * 11.5f; });
 
     const float rangeOct = proc.apvts.getRawParameterValue("noiseRange")->load();
     ModBand::update(noisePitch.knob, prmNoisePitch,
@@ -269,11 +270,12 @@ void MainPanel::armLearn(const juce::String& paramId, juce::TextButton& btn)
 
 // ==========================================================
 void MainPanel::setupKnob(KnobCell& c, const juce::String& text, const juce::String& paramId,
-                          juce::Colour accent)
+                          int accentId)
 {
     c.knob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     c.knob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 15);
-    c.knob.setColour(juce::Slider::rotarySliderFillColourId, accent);
+    c.knob.setColour(juce::Slider::rotarySliderFillColourId, LiftColors::accentById(accentId));
+    c.knob.getProperties().set("accentId", accentId); // テーマ変更へライブ連動
     addAndMakeVisible(c.knob);
 
     c.label.setText(text, juce::dontSendNotification);

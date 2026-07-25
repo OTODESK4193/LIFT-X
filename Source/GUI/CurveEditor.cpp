@@ -3,6 +3,7 @@
 // ==========================================
 #include "CurveEditor.h"
 #include "ColorPalette.h"
+#include <algorithm>
 #include <cmath>
 
 CurveEditor::CurveEditor()
@@ -21,6 +22,206 @@ CurveEditor::CurveEditor()
     curvePath.preallocateSpace(1024 * 3);
     fillPath.preallocateSpace(1024 * 3 + 16);
     setOpaque(false);
+
+    // ---- カーブプリセット / Snap / グリッド (右上コントロール) ----
+    presetBtn.onClick = [this] { showPresetMenu(); };
+    addAndMakeVisible(presetBtn);
+
+    snapBtn.setClickingTogglesState(true);
+    snapBtn.onClick = [this]
+    {
+        snapOn = snapBtn.getToggleState();
+        snapBtn.setColour(juce::TextButton::buttonColourId,
+                          snapOn ? LiftColors::accentMaster.withAlpha(0.35f)
+                                 : LiftColors::knobTrack);
+        repaint();
+    };
+    addAndMakeVisible(snapBtn);
+
+    gridBox.addItemList({ "4", "8", "16", "32", "64" }, 1);
+    gridBox.setSelectedItemIndex(2, juce::dontSendNotification); // 16
+    gridBox.onChange = [this]
+    {
+        static const int divs[5] = { 4, 8, 16, 32, 64 };
+        gridDiv = divs[juce::jlimit(0, 4, gridBox.getSelectedItemIndex())];
+        repaint();
+    };
+    addAndMakeVisible(gridBox);
+}
+
+void CurveEditor::resized()
+{
+    auto top = getLocalBounds().removeFromTop(24).reduced(8, 3);
+    gridBox.setBounds(top.removeFromRight(56));
+    top.removeFromRight(4);
+    snapBtn.setBounds(top.removeFromRight(52));
+    top.removeFromRight(4);
+    presetBtn.setBounds(top.removeFromRight(66));
+}
+
+// ==========================================================
+// Snap
+// ==========================================================
+float CurveEditor::snapX(float x) const
+{
+    if (!snapOn || gridDiv < 2)
+        return x;
+    return juce::jlimit(0.0f, 1.0f,
+                        std::round(x * (float)gridDiv) / (float)gridDiv);
+}
+
+// ==========================================================
+// カーブプリセット
+// ==========================================================
+juce::File CurveEditor::curveDir()
+{
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                   .getChildFile("LIFT-X").getChildFile("Curves");
+    dir.createDirectory();
+    return dir;
+}
+
+juce::StringArray CurveEditor::factoryCurveNames()
+{
+    return { "Linear Up", "Linear Down", "Exp Up (Soft)", "Exp Up (Hard)", "Log Up",
+             "Exp Down", "Log Down", "S-Curve Up", "S-Curve Down", "Ramp + Hold",
+             "Hold + Ramp", "Triangle", "V Shape", "Steps 4", "Steps 8",
+             "Saw 4", "Pulse 8", "Zigzag Up", "Flat Center", "Flat Max" };
+}
+
+CurveSnapshot CurveEditor::makeFactoryCurve(int id)
+{
+    CurveSnapshot s;
+    auto add = [&s](float x, float y, float c = 0.0f)
+    {
+        if (s.numPoints < CurveSnapshot::kMaxPoints)
+            s.pts[(size_t)s.numPoints++] = { x, y, c };
+    };
+
+    switch (id)
+    {
+    case 0:  add(0, 0);        add(1, 1); break;                       // Linear Up
+    case 1:  add(0, 1);        add(1, 0); break;                       // Linear Down
+    case 2:  add(0, 0, 0.45f); add(1, 1); break;                       // Exp Up Soft
+    case 3:  add(0, 0, 0.8f);  add(1, 1); break;                       // Exp Up Hard
+    case 4:  add(0, 0, -0.5f); add(1, 1); break;                       // Log Up
+    case 5:  add(0, 1, 0.45f); add(1, 0); break;                       // Exp Down
+    case 6:  add(0, 1, -0.5f); add(1, 0); break;                       // Log Down
+    case 7:  add(0, 0, 0.5f);  add(0.5f, 0.5f, -0.5f); add(1, 1); break; // S Up
+    case 8:  add(0, 1, 0.5f);  add(0.5f, 0.5f, -0.5f); add(1, 0); break; // S Down
+    case 9:  add(0, 0, 0.3f);  add(0.6f, 1); add(1, 1); break;         // Ramp+Hold
+    case 10: add(0, 0);        add(0.4f, 0, 0.5f); add(1, 1); break;   // Hold+Ramp
+    case 11: add(0, 0);        add(0.5f, 1); add(1, 0); break;         // Triangle
+    case 12: add(0, 1);        add(0.5f, 0); add(1, 1); break;         // V Shape
+    case 13: // Steps 4
+        for (int k = 0; k < 4; ++k)
+        {
+            add((float)k * 0.25f, (float)k / 3.0f);
+            add((float)(k + 1) * 0.25f - 0.02f, (float)k / 3.0f);
+        }
+        add(1, 1);
+        break;
+    case 14: // Steps 8
+        for (int k = 0; k < 8; ++k)
+        {
+            add((float)k * 0.125f, (float)k / 7.0f);
+            add((float)(k + 1) * 0.125f - 0.01f, (float)k / 7.0f);
+        }
+        add(1, 1);
+        break;
+    case 15: // Saw 4
+        add(0, 0); add(0.24f, 1); add(0.25f, 0); add(0.49f, 1);
+        add(0.5f, 0); add(0.74f, 1); add(0.75f, 0); add(1, 1);
+        break;
+    case 16: // Pulse 8
+        for (int k = 0; k < 8; ++k)
+        {
+            const float lv = (k % 2 == 0) ? 1.0f : 0.0f;
+            add((float)k * 0.125f, lv);
+            add((float)(k + 1) * 0.125f - 0.01f, lv);
+        }
+        add(1, 0);
+        break;
+    case 17: // Zigzag Up
+        add(0, 0); add(0.2f, 0.5f); add(0.4f, 0.25f);
+        add(0.6f, 0.75f); add(0.8f, 0.5f); add(1, 1);
+        break;
+    case 18: add(0, 0.5f); add(1, 0.5f); break;                        // Flat Center
+    default: add(0, 1);    add(1, 1); break;                           // Flat Max
+    }
+
+    s.pts[0].x = 0.0f;
+    s.pts[(size_t)s.numPoints - 1].x = 1.0f;
+    return s;
+}
+
+void CurveEditor::showPresetMenu()
+{
+    juce::PopupMenu m;
+    const auto names = factoryCurveNames();
+    for (int i = 0; i < names.size(); ++i)
+        m.addItem(1 + i, names[i]);
+
+    // ユーザー保存カーブ
+    auto files = curveDir().findChildFiles(juce::File::findFiles, false, "*.crv");
+    std::sort(files.begin(), files.end(),
+              [](const juce::File& a, const juce::File& b)
+              { return a.getFileName().compareIgnoreCase(b.getFileName()) < 0; });
+
+    if (!files.isEmpty())
+    {
+        juce::PopupMenu um;
+        for (int i = 0; i < files.size(); ++i)
+            um.addItem(200 + i, files[i].getFileNameWithoutExtension());
+        m.addSeparator();
+        m.addSubMenu("User Curves", um);
+    }
+
+    m.addSeparator();
+    m.addItem(100, "Save Current...");
+
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&presetBtn),
+        [this, files](int result)
+        {
+            if (result == 0) return;
+
+            if (result >= 1 && result <= 20)
+            {
+                setSnapshot(makeFactoryCurve(result - 1));
+                notify();
+            }
+            else if (result == 100)
+            {
+                saveCurveDialog();
+            }
+            else if (result >= 200 && result - 200 < files.size())
+            {
+                setSnapshot(CurveSnapshot::fromString(
+                    files[result - 200].loadFileAsString()));
+                notify();
+            }
+        });
+}
+
+void CurveEditor::saveCurveDialog()
+{
+    auto* w = new juce::AlertWindow("Save Curve", "Curve name:",
+                                    juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("name", "MyCurve");
+    w->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    w->enterModalState(true, juce::ModalCallbackFunction::create(
+        [this, w](int result)
+        {
+            if (result == 1)
+            {
+                auto name = w->getTextEditorContents("name").trim();
+                if (name.isEmpty()) name = "Curve";
+                curveDir().getChildFile(juce::File::createLegalFileName(name) + ".crv")
+                          .replaceWithText(snap.toString());
+            }
+        }), true);
 }
 
 // ==========================================================
@@ -138,12 +339,12 @@ void CurveEditor::mouseDrag(const juce::MouseEvent& e)
         auto& p = snap.pts[(size_t)dragPoint];
         p.y = toModelY(pos.y);
 
-        // X: 端点は固定、中間点は隣接ポイント間へクランプ
+        // X: 端点は固定、中間点はSnap適用後に隣接ポイント間へクランプ
         if (dragPoint > 0 && dragPoint < snap.numPoints - 1)
         {
             const float lo = snap.pts[(size_t)dragPoint - 1].x + 0.005f;
             const float hi = snap.pts[(size_t)dragPoint + 1].x - 0.005f;
-            p.x = juce::jlimit(lo, juce::jmax(lo, hi), toModelX(pos.x));
+            p.x = juce::jlimit(lo, juce::jmax(lo, hi), snapX(toModelX(pos.x)));
         }
         notify();
     }
@@ -190,10 +391,10 @@ void CurveEditor::mouseDoubleClick(const juce::MouseEvent& e)
         return;
     }
 
-    // 空白 → ポイント追加
+    // 空白 → ポイント追加 (Snap有効時はグリッドへ吸着)
     if (snap.numPoints >= CurveSnapshot::kMaxPoints) return;
 
-    const float nx = toModelX(pos.x);
+    const float nx = snapX(toModelX(pos.x));
     const float ny = toModelY(pos.y);
 
     int insertAt = snap.numPoints - 1;
@@ -243,6 +444,17 @@ void CurveEditor::paint(juce::Graphics& g)
         const float gy = a.getY() + a.getHeight() * (float)i / 4.0f;
         g.drawVerticalLine((int)gx, a.getY(), a.getBottom());
         g.drawHorizontalLine((int)gy, a.getX(), a.getRight());
+    }
+
+    // Snap用の補助線 (グリッド解像度に応じた縦線)
+    if (gridDiv > 4)
+    {
+        g.setColour(LiftColors::text.withAlpha(snapOn ? 0.10f : 0.05f));
+        for (int i = 1; i < gridDiv; ++i)
+        {
+            const float gx = a.getX() + a.getWidth() * (float)i / (float)gridDiv;
+            g.drawVerticalLine((int)gx, a.getY(), a.getBottom());
+        }
     }
 
     // バイポーラ中央線 (=変化なしライン)

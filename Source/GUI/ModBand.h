@@ -36,19 +36,8 @@ namespace ModBand
             yMax = juce::jmax(yMax, y);
         }
 
+        // 常時表示: 帯(変化幅)とライブドット(現在値)を常にノブへ表示する
         auto& props = knob.getProperties();
-        const bool active = (yMax - yMin) > 0.004f && lift > 0.002f;
-
-        if (!active)
-        {
-            if ((bool)props.getWithDefault("mod_active", false))
-            {
-                props.set("mod_active", false);
-                knob.repaint();
-            }
-            return;
-        }
-
         const float base = param->convertFrom0to1(param->getValue());
         auto bipOf = [lift](float y) noexcept { return (y - 0.5f) * 2.0f * lift; };
 

@@ -42,9 +42,8 @@ public:
         {
             g.setColour(LiftColors::textDim);
             g.setFont(juce::Font(juce::FontOptions(11.5f)));
-            g.drawText(juce::CharPointer_UTF8(
-                "\xe3\x83\x8e\xe3\x83\xbc\xe3\x83\x88\xe3\x82\xaa\xe3\x83\xb3\xe3\x81\xa7\xe3\x83\xa9\xe3\x82\xa4\xe3\x82\xb6\xe3\x83\xbc\xe3\x82\x92\xe9\x8c\xb2\xe9\x9f\xb3"),
-                getLocalBounds(), juce::Justification::centred);
+            g.drawText("Play a note to record the riser",
+                       getLocalBounds(), juce::Justification::centred);
             return;
         }
 
@@ -75,7 +74,7 @@ public:
         else
         {
             g.setColour(LiftColors::text.withAlpha(0.85f));
-            g.drawText(juce::CharPointer_UTF8("DRAG \xe2\x86\x92 WAV"),
+            g.drawText("DRAG > WAV",
                        getLocalBounds().reduced(8, 2), juce::Justification::topRight);
         }
     }

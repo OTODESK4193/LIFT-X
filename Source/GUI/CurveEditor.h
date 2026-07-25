@@ -46,12 +46,29 @@ public:
     void setProgressProvider(std::function<float()> f) { progressProvider = std::move(f); }
 
     void paint(juce::Graphics& g) override;
+    void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
 private:
+    // ---- Snap / グリッド補助線 ----
+    float snapX(float x) const;
+
+    // ---- カーブプリセット (ファクトリー20種 + ユーザーSave/Load) ----
+    void showPresetMenu();
+    void saveCurveDialog();
+    static juce::File curveDir();
+    static juce::StringArray factoryCurveNames();
+    static CurveSnapshot makeFactoryCurve(int id);
+
+    juce::TextButton presetBtn { "CURVES" };
+    juce::TextButton snapBtn { "SNAP" };
+    juce::ComboBox gridBox;
+    bool snapOn = false;
+    int gridDiv = 16;
+
     juce::Rectangle<float> plotArea() const;
     juce::Point<float> toScreen(float x, float y) const;
     float toModelX(float sx) const;

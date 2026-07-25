@@ -47,7 +47,7 @@ private:
     static const std::array<FxDef, 5>& defs();
 
     void timerCallback() override;
-    void mkKnob(Cell& c, const juce::String& text, const juce::String& paramId, juce::Colour accent);
+    void mkKnob(Cell& c, const juce::String& text, const juce::String& paramId, int accentId);
     void mkCombo(juce::ComboBox& box, juce::Label& label, const juce::String& text,
                  const juce::String& paramId, const juce::StringArray& items);
     void layoutCell(juce::Rectangle<int> area, Cell& c);

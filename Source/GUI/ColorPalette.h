@@ -113,6 +113,26 @@ namespace LiftColors
         accentMaster = pink;
     }
 
+    // アクセントID → 色 (ノブのARC色をテーマへライブ連動させるための解決関数)
+    //  ノブは "accentId" プロパティを持ち、ArcDialLookAndFeel が描画時に
+    //  ここから現在テーマの色を取得する (テーマ変更が即座に反映される)
+    enum AccentId { IdMint = 0, IdPink, IdLavender, IdPeach, IdBabyBlue, IdSage, IdRose, IdLilac };
+
+    inline juce::Colour accentById(int id) noexcept
+    {
+        switch (id & 7)
+        {
+        case IdMint:     return mint;
+        case IdPink:     return pink;
+        case IdLavender: return lavender;
+        case IdPeach:    return peach;
+        case IdBabyBlue: return babyBlue;
+        case IdSage:     return sage;
+        case IdRose:     return rose;
+        default:         return lilac;
+        }
+    }
+
     // カーブ番号 → アクセント色 (CurveStore::Index 順)
     inline juce::Colour curveAccent(int idx) noexcept
     {

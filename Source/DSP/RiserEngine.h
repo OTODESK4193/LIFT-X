@@ -352,15 +352,16 @@ private:
                                    + ((float)po.keyEnd - (float)po.keyStart) * ky
                                    + po.coarse;
 
-            // LEVEL: バイポーラ加算 (±0.5)
+            // LEVEL: バイポーラ加算・フルレンジ (中央=ノブ値, 上端=MAX方向, 下端=MIN方向)
+            //  ノブ0で下方向へ描いても変化なし (クランプ)。上端は必ずMAXへ到達可能。
             levelTarget[(size_t)o] = juce::jlimit(0.0f, 1.0f,
-                po.level + bip(CurveStore::oscCurve(o, 1)) * 0.5f);
+                po.level + bip(CurveStore::oscCurve(o, 1)) * 1.0f);
 
-            // DETUNE: ±50ct / SPREAD: ±0.5 (ティックレート平滑→ユニゾンテーブル再計算)
+            // DETUNE: ±100ct / SPREAD: ±1.0 (フルレンジ, ティックレート平滑)
             const float detTgt = juce::jlimit(0.0f, 100.0f,
-                po.detune + bip(CurveStore::oscCurve(o, 2)) * 50.0f);
+                po.detune + bip(CurveStore::oscCurve(o, 2)) * 100.0f);
             const float sprTgt = juce::jlimit(0.0f, 1.0f,
-                po.spread + bip(CurveStore::oscCurve(o, 3)) * 0.5f);
+                po.spread + bip(CurveStore::oscCurve(o, 3)) * 1.0f);
             detSm[(size_t)o] += 0.35f * (detTgt - detSm[(size_t)o]);
             sprSm[(size_t)o] += 0.35f * (sprTgt - sprSm[(size_t)o]);
             const float detEff = detSm[(size_t)o];
@@ -385,20 +386,21 @@ private:
             noiseCutSm += 0.5f * (target - noiseCutSm);
 
             levelTarget[3] = juce::jlimit(0.0f, 1.0f,
-                p.noiseLevel + bip(CurveStore::NoiseLevel) * 0.5f);
+                p.noiseLevel + bip(CurveStore::NoiseLevel) * 1.0f);
 
             const float resTgt = juce::jlimit(0.5f, 12.0f,
-                p.noiseRes + bip(CurveStore::NoiseRes) * 5.75f);
+                p.noiseRes + bip(CurveStore::NoiseRes) * 11.5f);
             noiseResSm += 0.35f * (resTgt - noiseResSm);
             noiseFilter.setCoef(noiseCutSm, noiseResSm);
         }
 
-        // フィルター: バイポーラ ±5oct × ENV AMT
+        // フィルター: フルレンジ (±10oct ≒ 20Hz..20kHz全域) × ENV AMT
+        //  カーブ上端でノブ位置に関わらず最大値へ到達できる (クランプ付き)
         for (int j = 0; j < kNumFilters; ++j)
         {
             if (!p.flt[(size_t)j].on) continue;
             const float target = p.flt[(size_t)j].cutoff
-                * std::exp2(p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j) * 5.0f);
+                * std::exp2(p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j) * 10.0f);
             cutSm[(size_t)j] += 0.5f * (target - cutSm[(size_t)j]);
             resSm[(size_t)j] += 0.35f * (p.flt[(size_t)j].res - resSm[(size_t)j]);
 

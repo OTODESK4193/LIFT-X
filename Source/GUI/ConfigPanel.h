@@ -30,11 +30,9 @@ public:
 
         limInfo.setFont(juce::Font(juce::FontOptions(12.0f)));
         limInfo.setColour(juce::Label::textColourId, LiftColors::textDim);
-        limInfo.setText(juce::CharPointer_UTF8(
-            "\xe3\x83\x96\xe3\x83\xaa\xe3\x83\x83\xe3\x82\xaf\xe3\x82\xa6\xe3\x82\xa9\xe3\x83\xbc\xe3\x83\xab\xe6\x96\xb9\xe5\xbc\x8f: "
-            "\xe7\x9e\xac\xe9\x96\x93\xe3\x82\xa2\xe3\x82\xbf\xe3\x83\x83\xe3\x82\xaf / \xe3\x83\xac\xe3\x82\xa4\xe3\x83\x86\xe3\x83\xb3\xe3\x82\xb7""0 (PDC\xe4\xb8\x8d\xe8\xa6\x81)\xe3\x80\x82"
-            "\xe5\x87\xba\xe5\x8a\x9b\xe3\x81\xaf\xe5\xbf\x85\xe3\x81\x9a""CEILING\xe4\xbb\xa5\xe4\xb8\x8b\xe3\x81\xab\xe5\x8f\x8e\xe3\x81\xbe\xe3\x82\x8a\xe3\x81\xbe\xe3\x81\x99\xe3\x80\x82"),
-            juce::dontSendNotification);
+        limInfo.setText("Brickwall: instant attack, zero latency (no PDC). "
+                        "Output never exceeds CEILING.",
+                        juce::dontSendNotification);
         addAndMakeVisible(limInfo);
 
         // ---- カラーテーマ ----
@@ -62,10 +60,8 @@ public:
 
         themeBanner.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
         themeBanner.setColour(juce::Label::textColourId, LiftColors::peach);
-        themeBanner.setText(juce::CharPointer_UTF8(
-            "\xe3\x83\x86\xe3\x83\xbc\xe3\x83\x9e\xe5\xa4\x89\xe6\x9b\xb4\xe3\x82\x92\xe5\xae\x8c\xe5\x85\xa8\xe3\x81\xab\xe9\x81\xa9\xe7\x94\xa8\xe3\x81\x99\xe3\x82\x8b\xe3\x81\xab\xe3\x81\xaf\xe3\x80\x81"
-            "\xe3\x83\x97\xe3\x83\xa9\xe3\x82\xb0\xe3\x82\xa4\xe3\x83\xb3\xe3\x82\xa6\xe3\x82\xa3\xe3\x83\xb3\xe3\x83\x89\xe3\x82\xa6\xe3\x82\x92\xe9\x96\x8b\xe3\x81\x8d\xe7\x9b\xb4\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x8f\xe3\x81\xa0\xe3\x81\x95\xe3\x81\x84"),
-            juce::dontSendNotification);
+        themeBanner.setText("Reopen the plugin window to fully apply the new theme",
+                            juce::dontSendNotification);
         themeBanner.setVisible(false);
         addAndMakeVisible(themeBanner);
 
@@ -134,6 +130,7 @@ private:
         k.setSliderStyle(juce::Slider::RotaryVerticalDrag);
         k.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 62, 15);
         k.setColour(juce::Slider::rotarySliderFillColourId, LiftColors::accentMaster);
+        k.getProperties().set("accentId", (int)LiftColors::IdPink); // テーマ連動
         addAndMakeVisible(k);
 
         l.setText(text, juce::dontSendNotification);

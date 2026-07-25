@@ -68,7 +68,7 @@ public:
         g.setColour(juce::Colour(0xff3a3a3a));
         g.drawRect(getLocalBounds(), 1);
         g.setColour(juce::Colours::white.withAlpha(0.5f));
-        g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
         g.drawText("CATEGORY", colX(0) + 8, 4, 120, 14, juce::Justification::left);
         g.drawText("SUBCATEGORY", colX(1) + 8, 4, 160, 14, juce::Justification::left);
         g.drawText("PRESETS", colX(2) + 8, 4, 120, 14, juce::Justification::left);
@@ -275,7 +275,7 @@ private:
             if (!owner) return; bool a = (r == owner->selCat);
             if (a) g.fillAll(juce::Colour(0xff3a3a3a));
             g.setColour(a ? juce::Colours::white : juce::Colours::grey);
-            g.setFont(juce::Font(16.0f, juce::Font::bold));
+            g.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
             g.drawText(owner->categories[r], 12, 0, w - 20, h, juce::Justification::centredLeft);
         }
         void listBoxItemClicked(int r, const juce::MouseEvent&) override {
@@ -321,7 +321,7 @@ private:
                 g.drawText(fav ? juce::String::fromUTF8("\xE2\x98\x85") : juce::String::fromUTF8("\xE2\x98\x86"),
                            6, 0, 22, h, juce::Justification::centred);
                 g.setColour(sel ? juce::Colours::white : juce::Colours::lightgrey);
-                g.setFont(juce::Font(14.0f, juce::Font::bold));
+                g.setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
                 g.drawText(juce::String::fromUTF8("\xE2\x97\x86 ") + fi.name + "    [" + fi.category + "]",
                            32, 0, w - 38, h, juce::Justification::centredLeft);
                 return;
@@ -341,7 +341,7 @@ private:
             g.drawText(fav ? juce::String::fromUTF8("\xE2\x98\x85") : juce::String::fromUTF8("\xE2\x98\x86"),
                        6, 0, 22, h, juce::Justification::centred);
             g.setColour(sel ? juce::Colours::white : juce::Colours::lightgrey);
-            g.setFont(juce::Font(14.0f, sel ? juce::Font::bold : juce::Font::plain));
+            g.setFont(juce::Font(juce::FontOptions(14.0f, sel ? juce::Font::bold : juce::Font::plain)));
             juce::String label = it.name;
             if (it.subCat.isNotEmpty() && it.subCat != "Uncategorized") label += "    [" + it.subCat + "]";
             g.drawText(label, 32, 0, w - 38, h, juce::Justification::centredLeft);

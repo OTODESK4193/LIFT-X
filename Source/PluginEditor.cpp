@@ -27,6 +27,18 @@ LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
     liftModeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         proc.apvts, "liftMode", liftModeButton);
 
+    // プリセットナビゲーション (ヘッダー右)
+    addAndMakeVisible(prevPresetButton);
+    addAndMakeVisible(nextPresetButton);
+    addAndMakeVisible(presetNameLabel);
+    prevPresetButton.onClick = [this] { proc.stepPreset(-1); timerCallback(); };
+    nextPresetButton.onClick = [this] { proc.stepPreset(1); timerCallback(); };
+    presetNameLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+    presetNameLabel.setColour(juce::Label::textColourId, LiftColors::text);
+    presetNameLabel.setJustificationType(juce::Justification::centred);
+    startTimerHz(2);
+    timerCallback();
+
     addChildComponent(mainPanel);
     addChildComponent(oscEnvPanel);
     addChildComponent(filterPanel);
@@ -41,6 +53,14 @@ LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
 LiftXAudioProcessorEditor::~LiftXAudioProcessorEditor()
 {
     setLookAndFeel(nullptr);
+}
+
+void LiftXAudioProcessorEditor::timerCallback()
+{
+    auto name = proc.getCurrentPresetName();
+    if (name.isEmpty()) name = "-";
+    if (presetNameLabel.getText() != name)
+        presetNameLabel.setText(name, juce::dontSendNotification);
 }
 
 void LiftXAudioProcessorEditor::setActiveTab(Tab t)
@@ -81,36 +101,37 @@ void LiftXAudioProcessorEditor::paint(juce::Graphics& g)
 {
     g.fillAll(LiftColors::bg);
 
-    // ヘッダー
+    // ヘッダー (バージョン情報はCONFIGタブへ移動)
     g.setColour(LiftColors::text);
     g.setFont(juce::Font(juce::FontOptions(20.0f, juce::Font::bold)));
-    g.drawText("LIFT-X", 16, 8, 140, 28, juce::Justification::centredLeft);
-
-    g.setColour(LiftColors::textDim);
-    g.setFont(juce::Font(juce::FontOptions(10.5f)));
-    g.drawText("RISER SYNTH  v" LIFTX_VERSION "  -  OTODESK",
-               getWidth() - 260, 8, 244, 28, juce::Justification::centredRight);
+    g.drawText("LIFT-X", 16, 8, 100, 28, juce::Justification::centredLeft);
 }
 
 void LiftXAudioProcessorEditor::resized()
 {
     auto r = getLocalBounds();
 
-    // ヘッダー行: タイトル(左) + LIFT MANUAL/AUTO + タブボタン(中央)
+    // ヘッダー行: ロゴ(左) → LIFT MANUAL/AUTO → タブ (全て左寄せ)
+    //             右側: プリセットナビ (◀ 名前 ▶)
     auto header = r.removeFromTop(44);
-    header.removeFromLeft(120);
-    header.removeFromRight(30);
-    header = header.withSizeKeepingCentre(112 + 12 + 6 * 84 + 5 * 6, 28);
+    header.removeFromLeft(112);                 // ロゴ分
+    header = header.reduced(0, 8);
 
-    liftModeButton.setBounds(header.removeFromLeft(112));
-    header.removeFromLeft(12);
+    // 右: プリセットナビ
+    auto nav = header.removeFromRight(240);
+    prevPresetButton.setBounds(nav.removeFromLeft(26));
+    nextPresetButton.setBounds(nav.removeFromRight(26));
+    presetNameLabel.setBounds(nav.reduced(4, 0));
+
+    liftModeButton.setBounds(header.removeFromLeft(108));
+    header.removeFromLeft(10);
 
     juce::TextButton* tabs[6] = { &mainTabButton, &oscEnvTabButton, &filterTabButton,
                                   &fxTabButton, &presetTabButton, &configTabButton };
     for (auto* b : tabs)
     {
-        b->setBounds(header.removeFromLeft(84));
-        header.removeFromLeft(6);
+        b->setBounds(header.removeFromLeft(78));
+        header.removeFromLeft(5);
     }
 
     // パネル領域

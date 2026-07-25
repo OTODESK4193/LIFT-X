@@ -106,9 +106,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
         [](int v, int) { return noteName(v); });
 
     // ---- グローバル ----
+    // LIFT = ENV評価位置。デフォルトは AUTO + 0% (Manual時にEndKey側で鳴る誤解を防ぐ)
     add(std::make_unique<FloatP>(juce::ParameterID{"lift", 1}, "LIFT",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f, attr(pctStr)));
-    add(std::make_unique<BoolP>(juce::ParameterID{"liftMode", 1}, "LIFT Auto", false));
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, attr(pctStr)));
+    add(std::make_unique<BoolP>(juce::ParameterID{"liftMode", 1}, "LIFT Auto", true));
     add(std::make_unique<ChoiceP>(juce::ParameterID{"bars", 1}, "Bars",
         getBarsNames(), 7)); // デフォルト "4"
     add(std::make_unique<FloatP>(juce::ParameterID{"attack", 1}, "Attack",
@@ -589,36 +590,37 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
     };
     auto c01 = [](float v) noexcept { return juce::jlimit(0.0f, 1.0f, v); };
 
-    fp.satAmt = c01(pSatAmt->load() + bip(CurveStore::SatAmt) * 0.5f);
+    // フルレンジ加算: 中央=ノブ値 / 上端=MAX方向 / 下端=MIN方向 (クランプ付き)
+    fp.satAmt = c01(pSatAmt->load() + bip(CurveStore::SatAmt) * 1.0f);
     fp.satAlgo = (int)pSatAlgo->load();
-    fp.satDrive = juce::jlimit(1.0f, 12.0f, pSatDrive->load() + bip(CurveStore::SatDrive) * 5.5f);
+    fp.satDrive = juce::jlimit(1.0f, 12.0f, pSatDrive->load() + bip(CurveStore::SatDrive) * 11.0f);
     fp.satPreHz = pSatPre->load();
     fp.satTrimDb = pSatTrim->load();
 
-    fp.choAmt = c01(pChoAmt->load() + bip(CurveStore::ChoAmt) * 0.5f);
+    fp.choAmt = c01(pChoAmt->load() + bip(CurveStore::ChoAmt) * 1.0f);
     fp.choRate = pChoRate->load();
-    fp.choDepth = c01(pChoDepth->load() + bip(CurveStore::ChoDepth) * 0.5f);
+    fp.choDepth = c01(pChoDepth->load() + bip(CurveStore::ChoDepth) * 1.0f);
     fp.choWidth = pChoWidth->load();
 
-    fp.dlyAmt = c01(pDlyAmt->load() + bip(CurveStore::DlyAmt) * 0.5f);
-    fp.dlyFeedback = juce::jlimit(0.0f, 0.95f, pDlyFb->load() + bip(CurveStore::DlyFb) * 0.475f);
+    fp.dlyAmt = c01(pDlyAmt->load() + bip(CurveStore::DlyAmt) * 1.0f);
+    fp.dlyFeedback = juce::jlimit(0.0f, 0.95f, pDlyFb->load() + bip(CurveStore::DlyFb) * 0.95f);
     fp.dlyDuck = pDlyDuck->load();
     fp.dlyDamp = pDlyDamp->load();
     // TIME: カーブで拍長を±2オクターブ変調 (上=長く / 下=短く=加速)
     fp.dlyBeats = FxChain::delayTimeToBeats((int)pDlyTime->load())
                 * std::exp2(bip(CurveStore::DlyTime) * 2.0f);
 
-    fp.revAmt = c01(pRevAmt->load() + bip(CurveStore::RevAmt) * 0.5f);
+    fp.revAmt = c01(pRevAmt->load() + bip(CurveStore::RevAmt) * 1.0f);
     fp.revDecay = pRevDecay->load();
-    fp.revShimmer = c01(pRevShimmer->load() + bip(CurveStore::RevShimmer) * 0.5f);
+    fp.revShimmer = c01(pRevShimmer->load() + bip(CurveStore::RevShimmer) * 1.0f);
     fp.revDamp = pRevDamp->load();
     fp.revMod = pRevMod->load();
 
-    fp.duckAmt = c01(pDuckAmt->load() + bip(CurveStore::DuckAmt) * 0.5f);
+    fp.duckAmt = c01(pDuckAmt->load() + bip(CurveStore::DuckAmt) * 1.0f);
     // RATE: ±2オクターブを音楽的に量子化 (×4..×1/4)
     fp.duckBeats = FxChain::duckRateToBeats((int)pDuckRate->load())
                  * std::exp2((float)juce::roundToInt(bip(CurveStore::DuckRate) * 2.0f));
-    fp.duckShape = juce::jlimit(0.5f, 8.0f, pDuckShape->load() + bip(CurveStore::DuckShape) * 3.75f);
+    fp.duckShape = juce::jlimit(0.5f, 8.0f, pDuckShape->load() + bip(CurveStore::DuckShape) * 7.5f);
 }
 
 // ==========================================================
@@ -666,7 +668,7 @@ void LiftXAudioProcessor::clearCustomWavetable(int oscIdx)
 // ==========================================================
 // ステート保存/復元 (APVTS + カーブ + WTパス)
 // ==========================================================
-juce::ValueTree LiftXAudioProcessor::buildStateTree() const
+juce::ValueTree LiftXAudioProcessor::buildStateTree()
 {
     auto state = apvts.copyState();
 
@@ -769,6 +771,42 @@ void LiftXAudioProcessor::loadFactoryPreset(int index)
 {
     FactoryPresets::apply(*this, index);
     mCurrentPresetName = FactoryPresets::nameOf(index);
+}
+
+void LiftXAudioProcessor::stepPreset(int delta)
+{
+    struct Entry
+    {
+        bool factory;
+        int idx;
+        juce::File file;
+        juce::String name;
+    };
+    std::vector<Entry> list;
+
+    for (int i = 0; i < FactoryPresets::count(); ++i)
+        list.push_back({ true, i, {}, FactoryPresets::nameOf(i) });
+
+    auto files = getUserPresetDir().findChildFiles(juce::File::findFiles, true, "*.xml");
+    std::sort(files.begin(), files.end(),
+              [](const juce::File& a, const juce::File& b)
+              { return a.getFullPathName().compareIgnoreCase(b.getFullPathName()) < 0; });
+    for (const auto& f : files)
+        list.push_back({ false, -1, f, f.getFileNameWithoutExtension() });
+
+    if (list.empty()) return;
+
+    int cur = -1;
+    for (int i = 0; i < (int)list.size(); ++i)
+        if (list[(size_t)i].name == mCurrentPresetName) { cur = i; break; }
+
+    const int n = (int)list.size();
+    const int next = (cur < 0) ? (delta > 0 ? 0 : n - 1)
+                               : ((cur + delta) % n + n) % n;
+
+    const auto& e = list[(size_t)next];
+    if (e.factory) loadFactoryPreset(e.idx);
+    else           loadUserPreset(e.file);
 }
 
 // ==========================================================
