@@ -47,6 +47,9 @@ public:
         //  Auto  : Progress(0→1)が評価位置。ライザーとして自動進行
         float lift = 1.0f;
         bool  liftAuto = false;
+        // REVERSE: ENV評価位置を 1-pos に反転する。全カーブが逆再生になるため、
+        //  ライザー↔ダウナーがそのまま入れ替わる (ピッチ/レベル/フィルター/FX全て)。
+        bool  reverse = false;
 
         // ---- Pitch ENV スケール量子化 (Key/Scale はグローバル, 適用可否はOSC毎) ----
         bool scaleOn = false;    // マスターOn/Off (Configタブ)
@@ -114,7 +117,10 @@ public:
         // ---- サンプル単位平滑 ----
         smCoef      = 1.0f - std::exp(-1.0f / (0.004f  * (float)sr)); // τ≒4ms (通常ピッチ/レベル)
         smCoefFast  = 1.0f - std::exp(-1.0f / (0.0012f * (float)sr)); // τ≒1.2ms (スケール量子化時のピッチ)
-        declickCoef = 1.0f - std::exp(-1.0f / (0.002f  * (float)sr)); // τ≒2ms (リトリガーデクリック)
+
+        // リトリガー用デクリック: 1.5msのリニアランプ (0/1へ厳密に到達させる)
+        declickSamples = juce::jmax(8, (int)(sr * 0.0015));
+        declickInc = 1.0f / (float)declickSamples;
 
         // ---- コントロールティック単位平滑 (SR非依存化) ----
         //  従来は固定係数 (0.3/0.35/0.5) だったため、ティック間隔が短くなる
@@ -156,6 +162,9 @@ public:
         ctrlCount = 0;
         snapNext = true;
         declickGain = 1.0f;
+        declickState = Declick::Idle;
+        pendingNote = false;
+        pendNote = -1;
         liftSm = 1.0f;
         for (auto& po : phase) po.fill(0.0f);
         pitchSm.fill(60.0f);
@@ -182,32 +191,37 @@ public:
     }
 
     // ---- MIDI ----
+    //  発音中の再ノートオン (連打・リトリガー) は 2段階デクリックで処理する。
+    //
+    //  旧実装は declickGain を「いきなり 0 に落として」からフェードインしていた。
+    //  フェードイン自体は滑らかでも、0へ落とす瞬間が振幅の段差になるため、
+    //  それがそのままプチッというクリックになっていた (連打時に顕著)。
+    //
+    //  新実装:
+    //    1) FadeOut : 現在の音を約1.5msで無音までリニアに絞る (段差なし)
+    //    2) 無音になった時点で位相/進行/平滑スナップ/フィルター状態をリセット
+    //       → 不連続が起きる処理はすべて出力が0のあいだに済ませる
+    //    3) FadeIn  : 約1.5msで復帰
+    //  リセットが遅延する分の約1.5msは知覚できない。
     void noteOn(int note, float velocity, double ppqNow, bool hostPlaying) noexcept
     {
-        // リトリガー時 (発音中の再ノートオン) は位相リセットの不連続を
-        // 2msのデクリックランプで隠す (ブチ切れ/クリック対策)
-        if (ampEnv > 0.02f)
-            declickGain = 0.0f;
-        else
+        // 十分に鳴っている最中なら、必ずフェードアウトを経由させる
+        if (ampEnv > kRetrigThresh || declickState == Declick::FadeOut)
         {
-            // 完全な新規発音: フィルターの残留状態をクリア (前回の残響リング防止)
-            for (auto& row : filters)
-                for (auto& f : row)
-                    f.reset();
-            noiseFilter.reset();
+            // 連打でフェードアウト中に更にノートオンが来た場合は最新の内容で上書き
+            pendingNote = true;
+            pendNote = note;
+            pendVel = velocity;
+            pendPpq = ppqNow;
+            pendHost = hostPlaying;
+            declickState = Declick::FadeOut;
+            return;
         }
 
-        curNote = note;
-        noteHeld = true;
-        hostSync = hostPlaying;
-        startPpq = ppqNow;
-        progress = 0.0;
-        velGain = 0.25f + 0.75f * juce::jlimit(0.0f, 1.0f, velocity);
-        ctrlCount = 0;      // 次サンプルで即コントロールティック
-        snapNext = true;    // 平滑をターゲットへスナップ (古い値からのグライド防止)
-        for (int o = 0; o < kNumOscs; ++o)
-            for (int v = 0; v < kMaxUnison; ++v)
-                phase[(size_t)o][(size_t)v] = std::fmod(0.137f * (float)(v + 1) * (float)(o + 1), 1.0f);
+        // ほぼ無音 (-54dB以下) からの発音は段差にならないため即時適用
+        applyNoteOn(note, velocity, ppqNow, hostPlaying);
+        declickState = Declick::Idle;
+        declickGain = 1.0f;
     }
 
     void noteOff(int note) noexcept
@@ -217,6 +231,33 @@ public:
     }
 
     void allNotesOff() noexcept { noteHeld = false; }
+
+private:
+    // 実際のノートオン適用 (出力が無音のあいだに呼ぶこと)
+    void applyNoteOn(int note, float velocity, double ppqNow, bool hostPlaying) noexcept
+    {
+        curNote = note;
+        noteHeld = true;
+        hostSync = hostPlaying;
+        startPpq = ppqNow;
+        progress = 0.0;
+        velGain = 0.25f + 0.75f * juce::jlimit(0.0f, 1.0f, velocity);
+        ctrlCount = 0;      // 次サンプルで即コントロールティック
+        snapNext = true;    // 平滑をターゲットへスナップ (古い値からのグライド防止)
+
+        for (int o = 0; o < kNumOscs; ++o)
+            for (int v = 0; v < kMaxUnison; ++v)
+                phase[(size_t)o][(size_t)v] = std::fmod(0.137f * (float)(v + 1) * (float)(o + 1), 1.0f);
+
+        // フィルターの残留状態をクリア (前回の残響リング防止)。
+        // ここは必ず出力0の瞬間なので、リセットによる不連続は表に出ない。
+        for (auto& row : filters)
+            for (auto& f : row)
+                f.reset();
+        noiseFilter.reset();
+    }
+
+public:
 
     // ---- トランスポート同期 (ブロック毎・render前) ----
     //  bars: 1/32〜16小節 (小数対応)
@@ -236,7 +277,7 @@ public:
         }
     }
 
-    bool isNoteActive() const noexcept { return noteHeld || ampEnv > 1.0e-4f; }
+    bool isNoteActive() const noexcept { return noteHeld || pendingNote || ampEnv > 1.0e-4f; }
     float getProgressF() const noexcept { return (float)progress; }
 
     std::atomic<float> uiProgress { 0.0f };
@@ -260,7 +301,9 @@ public:
     {
         if (numSamples <= 0 || busL == nullptr || busR == nullptr) return;
 
-        if (!noteHeld && ampEnv <= 1.0e-4f)
+        // 保留中のノートオンがある場合は早期リターンしない
+        // (リリース中に連打された場合でも取りこぼさないため)
+        if (!noteHeld && ampEnv <= 1.0e-4f && !pendingNote)
         {
             if (progress > 0.0) { progress = 0.0; uiProgress.store(0.0f, std::memory_order_relaxed); }
             ampEnv = 0.0f;
@@ -369,10 +412,31 @@ public:
                 srcR[3] = nr;
             }
 
-            // ---- アンプエンベロープ + デクリック ----
+            // ---- アンプエンベロープ ----
             const float target = noteHeld ? 1.0f : 0.0f;
             ampEnv += (noteHeld ? attCoef : relCoef) * (target - ampEnv);
-            declickGain += declickCoef * (1.0f - declickGain);
+
+            // ---- 2段階デクリック (リニアランプ: 0/1へ厳密に到達する) ----
+            if (declickState == Declick::FadeOut)
+            {
+                declickGain -= declickInc;
+                if (declickGain <= 0.0f)
+                {
+                    declickGain = 0.0f;
+                    // 出力が完全に0のこの瞬間にリセットを実行する
+                    if (pendingNote)
+                    {
+                        pendingNote = false;
+                        applyNoteOn(pendNote, pendVel, pendPpq, pendHost);
+                    }
+                    declickState = Declick::FadeIn;
+                }
+            }
+            else if (declickState == Declick::FadeIn)
+            {
+                declickGain += declickInc;
+                if (declickGain >= 1.0f) { declickGain = 1.0f; declickState = Declick::Idle; }
+            }
 
             const float g = ampEnv * velGain * declickGain;
             for (int s = 0; s < kNumSources; ++s)
@@ -390,8 +454,11 @@ private:
     void controlTick(const Params& p, const CurveStore& curves) noexcept
     {
         // ENV評価位置: Auto=Progress / Manual=LIFTノブ (ティックレート平滑)
-        const float posTarget = juce::jlimit(0.0f, 1.0f,
+        //  REVERSE時は 1-pos として全カーブを逆から読む
+        float posTarget = juce::jlimit(0.0f, 1.0f,
             p.liftAuto ? (float)progress : p.lift);
+        if (p.reverse)
+            posTarget = 1.0f - posTarget;
         if (snapNext)
             liftSm = posTarget;   // ノートオン直後は評価位置も即スナップ (開始チャープ防止)
         else
@@ -590,9 +657,21 @@ private:
     std::array<float, kNumOscs> sprSm {};
     float smCoef = 0.01f;
     float smCoefFast = 0.03f;
-    float declickCoef = 0.02f;
-    float declickGain = 1.0f;
     float liftSm = 1.0f;
+
+    // ---- 2段階デクリック (リトリガー時のクリック対策) ----
+    enum class Declick { Idle, FadeOut, FadeIn };
+    static constexpr float kRetrigThresh = 0.002f;   // -54dB: これ以下は即時切替でも段差にならない
+    Declick declickState = Declick::Idle;
+    float declickGain = 1.0f;
+    float declickInc = 0.02f;
+    int   declickSamples = 64;
+    // フェードアウト完了まで保留するノートオン情報
+    bool   pendingNote = false;
+    int    pendNote = -1;
+    float  pendVel = 1.0f;
+    double pendPpq = 0.0;
+    bool   pendHost = false;
 
     // コントロールティック平滑係数 (prepare() でSRから算出)
     float liftTickCoef = 0.30f;

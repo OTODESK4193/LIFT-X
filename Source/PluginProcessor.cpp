@@ -146,8 +146,11 @@ void LiftXAudioProcessor::handleAsyncUpdate()
 
 void LiftXAudioProcessor::snapKeysToScale()
 {
-    const int key = juce::jlimit(0, 11, mLastSnapState.key);
-    const int type = juce::jlimit(0, ScaleQuantizer::numScales() - 1, mLastSnapState.type);
+    const auto st = readSnapState();
+    if (!st.on) return;
+
+    const int key = juce::jlimit(0, 11, st.key);
+    const int type = juce::jlimit(0, ScaleQuantizer::numScales() - 1, st.type);
 
     auto snapOne = [this, key, type](const juce::String& id)
     {
@@ -169,7 +172,7 @@ void LiftXAudioProcessor::snapKeysToScale()
 
     for (int i = 0; i < RiserEngine::kNumOscs; ++i)
     {
-        if (!mLastSnapState.oscApply[(size_t)i]) continue;   // 適用外のOSCは触らない
+        if (!st.oscApply[(size_t)i]) continue;   // 適用外のOSCは触らない
         const juce::String n(i + 1);
         snapOne("osc" + n + "KeyStart");
         snapOne("osc" + n + "KeyEnd");
@@ -197,6 +200,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
     add(std::make_unique<FloatP>(juce::ParameterID{"lift", 1}, "LIFT",
         juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, attr(pctStr)));
     add(std::make_unique<BoolP>(juce::ParameterID{"liftMode", 1}, "LIFT Auto", true));
+    // REVERSE: ENV評価位置を反転 (ライザー↔ダウナー)
+    add(std::make_unique<BoolP>(juce::ParameterID{"reverse", 1}, "Reverse", false));
     add(std::make_unique<ChoiceP>(juce::ParameterID{"bars", 1}, "Bars",
         getBarsNames(), 7)); // デフォルト "4"
     add(std::make_unique<FloatP>(juce::ParameterID{"attack", 1}, "Attack",
@@ -370,6 +375,7 @@ void LiftXAudioProcessor::cacheParameterPointers()
 
     pLift = p("lift");
     pLiftMode = p("liftMode");
+    pReverse = p("reverse");
     pBars = p("bars");
     pAttack = p("attack");
     pRelease = p("release");
@@ -433,8 +439,10 @@ void LiftXAudioProcessor::cacheParameterPointers()
 float LiftXAudioProcessor::getEnvPosition() const noexcept
 {
     const bool autoMode = pLiftMode->load() > 0.5f;
-    return juce::jlimit(0.0f, 1.0f,
+    const float pos = juce::jlimit(0.0f, 1.0f,
         autoMode ? mEngine.uiProgress.load(std::memory_order_relaxed) : pLift->load());
+    // REVERSE時はカーブを逆から読むため、プレイヘッド/ノブ帯の表示位置も反転させる
+    return (pReverse != nullptr && pReverse->load() > 0.5f) ? (1.0f - pos) : pos;
 }
 
 // ==========================================================
@@ -701,6 +709,7 @@ void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noex
 {
     ep.lift = pLift->load();
     ep.liftAuto = pLiftMode->load() > 0.5f;
+    ep.reverse = pReverse->load() > 0.5f;
     ep.attackMs = pAttack->load();
     ep.releaseMs = pRelease->load();
     ep.scaleOn = pScaleOn->load() > 0.5f;
@@ -764,8 +773,10 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
     // マルチENVカーブによるバイポーラ加算変調 (中央=ノブ値, ±レンジ半分)
     //  評価位置: Auto=Progress / Manual=LIFTノブ (エンジンと同一規則)
     const bool liftAuto = pLiftMode->load() > 0.5f;
-    const float evalPos = juce::jlimit(0.0f, 1.0f,
+    float evalPos = juce::jlimit(0.0f, 1.0f,
         liftAuto ? mEngine.getProgressF() : pLift->load());
+    if (pReverse->load() > 0.5f)
+        evalPos = 1.0f - evalPos;   // REVERSE: エンジンと同一規則
     auto bip = [this, evalPos](int idx) noexcept
     {
         const float y = mCurves.read(idx).evaluate(evalPos);
@@ -804,6 +815,142 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
     fp.duckBeats = FxChain::duckRateToBeats((int)pDuckRate->load())
                  * std::exp2((float)juce::roundToInt(bip(CurveStore::DuckRate) * 2.0f));
     fp.duckShape = juce::jlimit(0.5f, 8.0f, pDuckShape->load() + bip(CurveStore::DuckShape) * 7.5f);
+}
+
+// ==========================================================
+// RANDOM (メッセージスレッド専用)
+//  MAINタブ + OSC ENVタブのみを対象に、音楽的に成立する範囲でランダマイズする。
+//  MASTER / FX / FILTER / CONFIG(スケール設定・テーマ・リミッター) は変更しない。
+//
+//  「破綻しない」ための制約:
+//   - 必ずOSC1が有効かつ十分なレベル → 無音にならない
+//   - Start/EndKey は全OSCで共通の音域を使い、COARSEは和声的な度数から選ぶ
+//     → OSC間が不協和にならない
+//   - ライザー/ダウナーの向きは全OSCで揃える
+//   - UNISONとDETUNE/SPREADを連動 → ユニゾン1本で過大デチューンにならない
+//   - Pitchカーブは単調 → 上がったり下がったりする不自然な動きを避ける
+//   - Scaleクオンタイズが有効ならキーをスケール構成音へスナップ
+// ==========================================================
+void LiftXAudioProcessor::randomizeMainAndOsc()
+{
+    juce::Random rng((juce::int64)juce::Time::getHighResolutionTicks());
+
+    auto setP = [this](const juce::String& id, float v)
+    {
+        if (auto* prm = apvts.getParameter(id))
+        {
+            const auto& r = prm->getNormalisableRange();
+            prm->setValueNotifyingHost(r.convertTo0to1(juce::jlimit(r.start, r.end, v)));
+        }
+    };
+    auto rf     = [&rng](float lo, float hi) { return lo + rng.nextFloat() * (hi - lo); };
+    auto ri     = [&rng](int lo, int hi)     { return lo + rng.nextInt(juce::jmax(1, hi - lo + 1)); };
+    auto chance = [&rng](float p)            { return rng.nextFloat() < p; };
+    // 対数レンジ用 (Hz系を聴感的に均一なランダムにする)
+    auto rlog   = [&rf](float lo, float hi)  { return std::exp(rf(std::log(lo), std::log(hi))); };
+
+    // ---- グローバル ----
+    //  Bars: 音楽的な長さへバイアス (1/2, 1, 2, 4, 8)。1/32などの極端値は選ばない
+    static const int kBarChoices[] = { 4, 5, 6, 7, 7, 8 };
+    setP("bars", (float)kBarChoices[ri(0, 5)]);
+    setP("attack",  rlog(0.5f, 30.0f));
+    setP("release", rlog(120.0f, 900.0f));
+
+    // ライザー / ダウナー (ダウナーは25%)
+    const bool downer = chance(0.25f);
+
+    // 全OSC共通の音域 (2〜5オクターブ)。ここを共有することで音程関係が保たれる
+    const int span   = ri(24, 60);
+    const int lowKey = ri(28, 52);
+    const int highKey = juce::jlimit(24, 108, lowKey + span);
+
+    // ---- OSC1-3 ----
+    //  OSC1は必ず有効。2,3は確率的に追加する
+    const int numActive = chance(0.45f) ? 1 : (chance(0.6f) ? 2 : 3);
+
+    // COARSE候補: ユニゾン/オクターブ/完全5度/長短3度など和声的な度数のみ
+    static const int kChordSteps[] = { 0, 0, 0, 12, -12, 7, -5, 3, 4, 5, 12, 7 };
+
+    for (int i = 1; i <= RiserEngine::kNumOscs; ++i)
+    {
+        const juce::String n(i);
+        const bool on = (i <= numActive);
+
+        setP("osc" + n + "On", on ? 1.0f : 0.0f);
+        setP("osc" + n + "Solo", 0.0f);      // SOLO/MUTEは常にオフ (無音事故の防止)
+        setP("osc" + n + "Mute", 0.0f);
+        if (!on) continue;
+
+        // 波形: Wavetable(5)はカスタム未ロード時にビルトインへ落ちるため除外
+        setP("osc" + n + "Wave", (float)ri(0, 4));
+        setP("osc" + n + "Pos", rf(0.0f, 1.0f));
+        setP("osc" + n + "Level", i == 1 ? rf(0.70f, 1.0f) : rf(0.30f, 0.75f));
+        setP("osc" + n + "Coarse", i == 1 ? 0.0f : (float)kChordSteps[ri(0, 11)]);
+
+        const int uni = chance(0.55f) ? ri(3, 7) : 1;
+        setP("osc" + n + "Uni", (float)uni);
+        // ユニゾン本数と連動: 1本のときに大きなデチューンを掛けない
+        setP("osc" + n + "Det",    uni > 1 ? rf(8.0f, 55.0f) : rf(0.0f, 12.0f));
+        setP("osc" + n + "Spread", uni > 1 ? rf(0.55f, 1.0f) : rf(0.0f, 0.4f));
+
+        setP("osc" + n + "KeyStart", (float)(downer ? highKey : lowKey));
+        setP("osc" + n + "KeyEnd",   (float)(downer ? lowKey  : highKey));
+    }
+
+    // ---- ノイズ ----
+    const bool useNoise = chance(0.6f);
+    setP("noiseSolo", 0.0f);
+    setP("noiseMute", 0.0f);
+    setP("noiseType",  (float)ri(0, 2));
+    setP("noiseLevel", useNoise ? rf(0.15f, 0.70f) : 0.0f);
+    setP("noisePitch", rlog(200.0f, 6000.0f));
+    setP("noiseRes",   rf(0.8f, 5.0f));
+    setP("noiseRange", rf(2.0f, 7.0f));
+
+    // ---- OSC ENV カーブ (0-11 = OSC1-3 の Pitch/Level/Detune/Spread, 12-14 = Noise) ----
+    //  FILTER(15-18) と FX(19-30) のカーブは対象外
+    auto makeCurve = [](float y0, float y1, float tension)
+    {
+        auto s = CurveSnapshot::makeDefault(y0, y1);
+        s.pts[0].curve = juce::jlimit(-1.0f, 1.0f, tension);
+        return s;
+    };
+
+    for (int o = 0; o < RiserEngine::kNumOscs; ++o)
+    {
+        // PITCH: 必ず 0→1 の単調上昇 (Start→End)。テンションで加速/減速だけ変える
+        mCurves.publish(CurveStore::oscCurve(o, 0), makeCurve(0.0f, 1.0f, rf(-0.5f, 0.7f)));
+
+        // LEVEL: 半分は変化なし(中央フラット)、半分は控えめなフェードイン
+        mCurves.publish(CurveStore::oscCurve(o, 1),
+            chance(0.5f) ? makeCurve(0.5f, 0.5f, 0.0f)
+                         : makeCurve(rf(0.20f, 0.45f), rf(0.55f, 0.85f), rf(-0.3f, 0.5f)));
+
+        // DETUNE / SPREAD: 変化なし、または広がっていく方向へ軽く
+        mCurves.publish(CurveStore::oscCurve(o, 2),
+            chance(0.6f) ? makeCurve(0.5f, 0.5f, 0.0f)
+                         : makeCurve(rf(0.35f, 0.5f), rf(0.55f, 0.8f), rf(-0.3f, 0.3f)));
+        mCurves.publish(CurveStore::oscCurve(o, 3),
+            chance(0.6f) ? makeCurve(0.5f, 0.5f, 0.0f)
+                         : makeCurve(rf(0.4f, 0.5f), rf(0.55f, 0.75f), 0.0f));
+    }
+
+    // ノイズ: PITCH は上昇、LEVEL はフェードイン、RES はほぼ据え置き
+    mCurves.publish(CurveStore::NoisePitch, makeCurve(rf(0.30f, 0.45f), rf(0.85f, 1.0f), rf(-0.3f, 0.6f)));
+    mCurves.publish(CurveStore::NoiseLevel,
+        useNoise ? makeCurve(rf(0.20f, 0.40f), rf(0.80f, 1.0f), rf(-0.2f, 0.6f))
+                 : makeCurve(0.5f, 0.5f, 0.0f));
+    mCurves.publish(CurveStore::NoiseRes,
+        chance(0.7f) ? makeCurve(0.5f, 0.5f, 0.0f)
+                     : makeCurve(rf(0.4f, 0.5f), rf(0.55f, 0.75f), 0.0f));
+
+    // Scaleクオンタイズが有効なら Start/End キーを構成音へ寄せる
+    snapKeysToScale();
+    rememberSnapState();
+
+    mCurrentPresetName = "Random";
+    mCurrentFactoryIndex = -1;
+    mCurrentUserFile = juce::File();
 }
 
 // ==========================================================

@@ -125,6 +125,11 @@ public:
     void stepPreset(int delta);   // ◀▶: Factory+Userの結合リストを順送り
     juce::String getCurrentPresetName() const { return mCurrentPresetName; }
 
+    // ---- RANDOM (メッセージスレッド専用) ----
+    //  MAINタブ + OSC ENVタブのパラメーターとカーブを「音楽的に破綻しない範囲」で
+    //  ランダマイズする。MASTERエリア / FX / CONFIG / FILTER は一切変更しない。
+    void randomizeMainAndOsc();
+
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void cacheParameterPointers();
@@ -205,6 +210,7 @@ private:
     // ---- キャッシュ済みパラメーターポインタ ----
     std::atomic<float>* pLift = nullptr;
     std::atomic<float>* pLiftMode = nullptr;   // 0=Manual 1=Auto(Progress連動)
+    std::atomic<float>* pReverse = nullptr;    // ENV評価位置の反転 (ライザー↔ダウナー)
     std::atomic<float>* pBars = nullptr;
     std::atomic<float>* pScaleOn = nullptr;    // Pitch ENV スケール量子化 マスターOn/Off
     std::atomic<float>* pScaleKey = nullptr;   // 0..11 (C..B)

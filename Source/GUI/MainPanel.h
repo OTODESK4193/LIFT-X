@@ -98,6 +98,9 @@ private:
     KnobCell liftCell, attackCell, releaseCell, masterCell;
     juce::ComboBox barsBox;
     juce::Label barsLabel;
+    // BARSコンボの下: ENV反転 / ランダマイズ
+    std::unique_ptr<GlowToggle> reverseButton;
+    juce::TextButton randomButton;
     ProgressStrip progressStrip;
     RiserWaveStrip waveStrip;
 

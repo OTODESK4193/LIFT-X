@@ -18,6 +18,23 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     addAndMakeVisible(barsLabel);
     setupCombo(barsBox, "bars", LiftXAudioProcessor::getBarsNames());
 
+    // ---- REVERSE: ENV評価位置を反転 (ライザー↔ダウナー) ----
+    reverseButton = std::make_unique<GlowToggle>("REVERSE", LiftColors::peach);
+    addAndMakeVisible(*reverseButton);
+    buttonAtts.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        proc.apvts, "reverse", *reverseButton));
+
+    // ---- RANDOM: MAIN/OSC ENVを音楽的な範囲でランダマイズ ----
+    randomButton.setButtonText("RANDOM");
+    addAndMakeVisible(randomButton);
+    randomButton.onClick = [this]
+    {
+        proc.randomizeMainAndOsc();
+        refreshKeyButtons();
+        for (int i = 0; i < 3; ++i)
+            refreshWaveDisplay(i);
+    };
+
     addAndMakeVisible(progressStrip);
     addAndMakeVisible(waveStrip);
 
@@ -141,14 +158,15 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
 // ==========================================================
 void MainPanel::timerCallback()
 {
-    // ---- LIFT Auto: ノブをProgressへ追従 ----
-    const float prog = proc.getUiProgress();
+    // ---- LIFT Auto: ノブをENV評価位置へ追従 ----
+    //  REVERSE時は評価位置が 1→0 と進むため、ノブもプレイヘッドと同じ向きに動く
+    //  (PROGRESSバーは時間軸なので常に 0→100% のまま)
     const bool autoMode = proc.apvts.getRawParameterValue("liftMode")->load() > 0.5f;
     if (autoMode)
     {
         if (liftCell.knob.isEnabled())
             liftCell.knob.setEnabled(false);
-        liftCell.knob.setValue(prog, juce::dontSendNotification);
+        liftCell.knob.setValue(proc.getEnvPosition(), juce::dontSendNotification);
     }
     else if (!liftCell.knob.isEnabled())
     {
@@ -348,9 +366,13 @@ void MainPanel::resized()
         liftCell.knob.setBounds(liftArea.reduced(2));
     }
     {
-        auto barsArea = top.removeFromLeft(84).reduced(4, 0);
+        auto barsArea = top.removeFromLeft(92).reduced(4, 0);
         barsLabel.setBounds(barsArea.removeFromTop(18));
         barsBox.setBounds(barsArea.removeFromTop(26).reduced(2, 0));
+        barsArea.removeFromTop(10);
+        reverseButton->setBounds(barsArea.removeFromTop(24).reduced(2, 0));
+        barsArea.removeFromTop(6);
+        randomButton.setBounds(barsArea.removeFromTop(24).reduced(2, 0));
     }
 
     KnobCell* globals[2] = { &attackCell, &releaseCell };
