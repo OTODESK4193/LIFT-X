@@ -1,395 +1,293 @@
-# LIFT-X — Riser MIDI Synthesizer (OTODESK)
+# LIFT-X
 
-ライザー専用MIDIシンセサイザー。JUCE 8.0系 / VST3 + Standalone。v0.4。
+![Release](https://img.shields.io/badge/release-v0.4.2-blue)
+![License](https://img.shields.io/badge/license-AGPLv3-green)
+![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
-## v0.4.2 追加/修正
+##
+<img src="Source/Assets/Main.jpg" width="700">
 
-### 修正: 連打時のクリックノイズ (原因は旧デクリック処理そのもの)
+## Overview
 
-MIDI鍵盤を連打したときに音の頭で鳴っていた「プチッ」の原因は、**リトリガー用の
-デクリック処理自体**でした。旧実装は発音中のノートオンで `declickGain` を
-**いきなり 0 に落として**から指数フェードインしていました。フェードイン側は
-滑らかでも、0へ落とす瞬間がフルスケールの段差になり、それがそのままクリックとして
-聞こえていました。
+**LIFT-X** is a riser-dedicated MIDI synthesiser VST3 built around one idea: **a riser is not an envelope — it is thirty-one envelopes moving together.**
 
-**2段階デクリック**に変更しました。
+Most instruments give you one or two modulation sources and ask you to build a riser out of them. LIFT-X inverts that. Every parameter worth sweeping — three oscillator pitches, their levels, detune and stereo spread, noise pitch/level/resonance, four filters and twelve FX parameters — gets its own multi-point curve, and all thirty-one are read from the same playhead. Draw the shape you want on each one and they arrive together, locked to the host transport.
 
-1. **FadeOut** — 現在の音を約1.5msでリニアに無音まで絞る (段差なし)
-2. **無音になった瞬間**に、位相リセット・進行リセット・平滑スナップ・
-   フィルター状態クリアを実行 — 不連続が生じる処理をすべて出力0のあいだに済ませる
-3. **FadeIn** — 約1.5msで復帰
+Pitch is handled differently too. The MIDI note is a **trigger only**; the actual pitch comes from a per-oscillator **Start Key → End Key** range, so a riser sweeps from exactly D2 to exactly G6 no matter which key you press. Turn on **Scale Quantize** and that sweep snaps to the notes of any of **70 scales**, turning a smooth glide into a stepped, in-key climb.
 
-リセットが約1.5ms遅れますが知覚できません。フェードアウト中に更にノートオンが来た
-場合は保留内容を最新で上書きするため、どれだけ速く連打しても破綻しません。
+**Design goal:** total control over the shape of a transition, without leaving the plugin.
 
-測定結果 (220Hzサイン波・連打間隔を変えて12回トリガー、隣接サンプル間の最大跳躍):
 
-| 連打間隔 | ゲイン包絡の段差(旧) | (新) | 出力の段差(旧) | (新) |
-|---|---|---|---|---|
-| 8ms   | 0.970 | 0.015 | 0.620 | 0.031 |
-| 15ms  | 0.988 | 0.015 | 0.391 | 0.034 |
-| 30ms  | 0.989 | 0.015 | 1.005 | 0.034 |
-| 60ms  | 0.989 | 0.015 | 0.845 | 0.031 |
-| 125ms | 0.989 | 0.015 | 0.757 | 0.031 |
+## Key Features
 
-旧実装のゲイン段差 約0.99 はほぼフルスケールの断崖です。新実装の 0.015 は
-リニアランプ1サンプル分 (1/66) そのもの。出力側の 0.031 は **220Hzサイン波が
-1サンプルで自然に動く量 (0.03134) と一致**しており、デクリック起因の不連続は
-完全に消えています。
+### 31 Multi-Point Envelopes on One Playhead
 
-副次的な効果として、v0.4.0で追加したノートオン時の平滑スナップ
-(FILTER CUTOFF/RES・NOISE CUTOFF/RES・DETUNE/SPREAD) も無音時に実行されるように
-なったため、リトリガー時のフィルター跳躍による過渡音も解消しました。
+* **One playhead, thirty-one curves.** LIFT is the evaluation position on the X axis of every curve. In AUTO it follows the host transport across the chosen bar length; in MANUAL it is a knob you can automate.
+* **Up to 128 points per curve**, each segment with its own tension handle. The same `evaluate()` code runs in the DSP and in the drawing, so what you see is exactly what you hear.
+* **Curves live outside the host parameter list.** They are stored in a lock-free `CurveStore` rather than APVTS, which structurally isolates them from Ableton Live's automation rewind behaviour.
+* **28 curve presets** (Linear / Exp / Log / S-Curve / Steps 4–32 / Saw 4–32 / Pulse 4–32 / Zigzag …) plus Save/Load of your own shapes, with an optional snap grid at 4/8/16/32/64 divisions.
 
-### 追加: REVERSE ボタン (MAINタブ / BARSコンボの下)
+### Absolute-Pitch Risers
 
-**ENV評価位置を 1-pos に反転**します。全31系統のカーブが逆から読まれるため、
-**ライザーはダウナーに、ダウナーはライザーに**そのまま入れ替わります
-(ピッチ・レベル・デチューン・フィルター・FXすべて)。
+* **Start Key → End Key per oscillator.** Press the ST or END button then play a note on your keyboard to set it (MIDI learn). The Pitch curve interpolates between them — bottom of the curve is Start, top is End.
+* **MIDI note is trigger only.** The riser lands on the same notes every time regardless of which key fires it.
+* **PITCH RAIL.** A live bar under each oscillator shows the current pitch as a note name, with tick marks at every scale tone in the Start–End span when quantizing.
+* **Reverse.** One button flips the evaluation position to `1-pos`, reading all thirty-one curves backwards — a riser becomes a downer and vice versa.
 
-- PROGRESSバーは時間軸なので常に 0→100% のまま。LIFTノブとカーブのプレイヘッドが
-  右→左へ動くことで「逆再生している」ことが視覚的に分かります
-- MANUALモードではLIFTノブの向きがそのまま反転します
-- PITCH RAILも追従し、バーが右から左へ減っていきます
+### Scale Quantize — 70 Scales
 
-### 追加: RANDOM ボタン (REVERSEの下)
+<img src="Source/Assets/Config.jpg" width="700">
 
-**MAINタブとOSC ENVタブのパラメーター/カーブ**を、音楽的に破綻しない範囲で
-ランダマイズします。**MASTERエリア・FX・FILTER・CONFIGは一切変更しません。**
+* **Stepped, in-key risers.** With quantize off the pitch glides along the curve; with it on the pitch snaps to the nearest note of the chosen Key and Scale, producing a staircase climb that always lands in key.
+* **70 scales** across seven groups: Basic, Modes & Variants, World, Indian, Japan/Asia, Symmetric/Bebop and Chord Tones — from Major and Minor Pentatonic through Hirajoshi, Iwato and Ryukyu to Bebop Dominant and chord-tone sets like Minor 7th and Major 9th.
+* **Per-oscillator apply.** Leave one oscillator unquantized to layer a smooth glide underneath a stepped one.
+* **Quantize before COARSE.** The offset is added after snapping, so an oscillator set to +12 st stays exactly one octave above.
+* **Automatic key snapping.** Changing Key, Scale or the apply toggles re-snaps each oscillator's Start and End keys to the closest scale tone. You can freely edit them afterwards, and preset loading never triggers it.
 
-破綻させないための制約:
+### Three Oscillators + Noise
 
-- **OSC1は必ず有効かつレベル0.70以上**、SOLO/MUTEは常にオフ → 無音にならない
-- **Start/EndKeyは全OSCで共通の音域**を使用 (2〜5オクターブ、MIDI 28〜108)。
-  10万回試行して範囲外・1オクターブ未満が0件であることを確認済み
-- **COARSEは和声的な度数のみ**から選択 (ユニゾン/オクターブ/完全5度/長短3度など)
-  → OSC間が不協和にならない
-- ライザー/ダウナーの向きは全OSCで統一 (ダウナーは25%の確率)
-- **UNISONとDETUNE/SPREADを連動** → ユニゾン1本で過大デチューンにならない
-- **Pitchカーブは必ず単調上昇** (テンションのみ変化) → 上下する不自然な動きを避ける
-- Bars は 1/2〜8小節へバイアス (1/32などの極端値は選ばない)
-- Wavetableは未ロード時にビルトインへ落ちるため波形候補から除外
-- **Scaleクオンタイズが有効なら、生成後にStart/Endキーを構成音へスナップ**
+* **Six wave modes** per oscillator — Sine, Triangle, Square, Saw, FM and **Wavetable** — with a POSITION knob that morphs continuously between frames.
+* **Custom wavetables per oscillator**, loaded from a two-pane category browser with a RANDOM button. Your wavetable folder is remembered in a global settings file, so you register it once.
+* **10-level mipmapped, FFT band-limited tables** — the harmonic count is chosen from the playback frequency, so a five-octave sweep does not alias at the top.
+* **Up to 7-voice unison** with detune and stereo spread, both sweepable by their own curves.
+* **White / Pink / Brown noise** through a dedicated band-pass, with its own pitch, resonance and range. Noise generation runs on a fixed 44.1 kHz clock and is interpolated up, so the spectrum is identical at every sample rate.
 
-プリセット名表示は "Random" になります。
+### Per-Source Filter Routing
 
-## v0.4.1 追加: FXのソース別ルーティング
+<img src="Source/Assets/FILTER.jpg" width="700">
 
-FXタブの各エフェクトタブ (SAT / CHORUS / DELAY / REVERB / DUCK) に
-**ROUTE: [OSC 1] [OSC 2] [OSC 3] [NOISE]** 行を追加。FILTERタブと同じ操作感で、
-**OFFにしたソースはそのエフェクトを完全にバイパスして素通し**します。
-5エフェクト × 4ソース = 20系統を個別に設定できます。
+* **Four ZDF/TPT state-variable filters** (LP / HP / BP / Notch), Cytomic-style trapezoidal integration that stays stable under the fastest curve sweeps.
+* **Each filter routes per source.** OSC 1–3 and Noise can be passed through or bypassed independently, so internally there are 4 × 4 = 16 filter instances.
+* **Full-range envelope.** Cutoff × ENV AMT spans ±10 octaves, so the top of the curve always reaches maximum regardless of where the knob sits.
 
-使用例:
-- サブ担当のOSCだけリバーブを外し、低域を濁らせずに上物だけ広げる
-- ノイズにだけディレイを掛けてスネアロール感を出す
-- OSC1にはサチュレーション、OSC2にはコーラス、と役割を分ける
+### Five-Slot FX Rack with Per-Effect Source Routing
 
-### 実装方式 (なぜソース毎に4系統持たないか)
+<img src="Source/Assets/FX.jpg" width="700">
 
-FxChain 1系統のメモリは 96kHz時で **15.2MB** (ShimmerReverbが16ch×2秒で11.7MBを占める)。
-ソース毎に独立したチェーンを持つと **61MB / 192kHzでは122MB**、CPUも4倍になり非現実的です。
+* **Choose the order.** Five slots, each assigned Saturation, Chorus, Delay, Reverb or Ducking.
+* **Every effect routes per source.** Keep the sub oscillator out of the reverb, send only the noise to the delay, saturate OSC 1 while OSC 2 goes clean — 5 effects × 4 sources, individually switchable.
+* **Saturation** with 10 ADAA algorithms (Soft Tanh, Hard Clip, Triode, Tape, Transformer, JFET, BJT, Wavefold, Exciter, Cubic), pre-HPF and output trim.
+* **Tempo-locked Delay and Ducking.** Delay times and duck rates lock to the host PPQ from 1 Bar down to 1/64 with dotted and triplet values. Ducking needs no sidechain input.
+* **Shimmer Reverb** — a 16-channel FDN with velvet-noise diffusion and an octave shifter.
+* **Twelve FX parameters are curve-modulated**, including Delay Time (±2 octaves of beat length) and Duck Rate (quantised to musical multiples).
 
-そこで **エフェクトのモジュール実体は各1個のまま共有し、エンジン出力を
-OSC1/2/3/Noiseの4バスに分離したままFXチェーンへ通す**方式を採りました。
-各スロットでは「ルーティングされたバスの合計」をモジュールへ入力し、
-**モジュールが加えた変化量(差分)を対象バスへ均等配分**して書き戻します。
+### Riser Capture & WAV Export
 
-- **全ソースON時のバス合計は、従来の単一信号処理と数値的に一致**します
-  (誤差は浮動小数の丸めのみ。6種のスロット構成 × 12万サンプルで最大 3.6e-07 を確認)。
-  **既存70プリセットの音は一切変わりません。**
-- **Ducking** は入力に依存しない純ゲインなので、差分ではなくゲインを各バスへ
-  直接適用します (下流ルーティングとの相性が良く、合計も厳密に一致)。
-- **スロット間ソフトクリップ**も「合計」に対して判定し、求まったゲイン比を
-  全バスへ配分するため、従来と同じ歪み方になります。
-- **サチュレーションは合計に対して掛かります**。非線形処理は Σf(x) ≠ f(Σx) のため、
-  ソース別に個別に歪ませると既存プリセットの音が変わってしまうためです。
-- ルーティング対象が0本のときも、モジュールには無音を通して内部バッファ/LFOを
-  進め続けます (再ルーティング時の陳腐化バースト防止)。
+* The plugin's own output is recorded from note-on, cut exactly at the chosen bar length, plus 1.5 s of FX tail.
+* **Drag the waveform strip into your DAW** to drop it as a 32-bit float WAV at the session sample rate.
 
-メモリ増加はブロックサイズ分のバス4本 (数十KB) のみ、CPU増加も加算処理の分だけです。
+### 70 Factory Presets
 
-その他:
-- モノラル出力時のダウンミックスをFXチェーンの**後**に移動。コーラス/リバーブを
-  ステレオのまま処理してから畳むため、モノ和が正しくなりました。
-- 20個のルーティングパラメーターはパラメーターリストの**末尾**に追加しています
-  (既存セッションのオートメーション割り当てに影響しません。旧セッションでは
-  全ON扱いになるため挙動も変わりません)。
+<img src="Source/Assets/PRESET.jpg" width="700">
 
-## v0.4.0 追加/修正
+Eleven categories — EDM, Trance, Bass, Techno, Cinematic, Downer, **Scale Riser**, Dubstep, DnB, Hardstyle and Ambient — covering waveforms, noise, filters, FX and curves. A three-column browser with subcategories, search, favourites and user presets sits on its own tab, and ◀▶ in the header steps through factory and user presets in one list.
 
-### 追加: Pitch ENV スケールクオンタイズ
 
-CONFIGタブ最上段に **PITCH ENV - SCALE** セクションを新設。
+## Parameter Reference
 
-- **SCALE QUANTIZE (On/Off)** — OFFは従来通りカーブ通りの滑らかなピッチ変化。
-  ONにするとPitch ENVがKey+Scaleの構成音へスナップし、階段状のライザーになる。
-- **KEY** — C〜B の12種。
-- **SCALE** — **全70種**。カテゴリ見出し付きのコンボボックスで選択する。
-  - BASIC (16): Chromatic / Major / Natural Minor / Major・Minor Pentatonic /
-    Dorian / Lydian / Mixolydian / Phrygian / Harmonic・Melodic Minor /
-    Whole Tone / Octaves & Fifths / Quartal / Sus2-4 Cloud / Diminished 7th
-  - MODES & VARIANTS (15): Locrian / Blues Minor・Major / Harmonic Major /
-    Double Harmonic / Phrygian Dominant / Lydian Dominant・Augmented /
-    Mixolydian b6 / Half Diminished / Altered / Dorian b2・#4 / Lydian #2 / Ultra Locrian
-  - WORLD (9): Hungarian Minor・Major / Neapolitan Minor・Major / Enigmatic /
-    Persian / Oriental / Nine-Tone / Spanish 8-Tone
-  - INDIAN (4): Todi / Marva / Purvi / Ahir Bhairav
-  - JAPAN / ASIA (10): Hirajoshi / In-Sen / Iwato / Kumoi / Yo(Ryo) /
-    Miyako-Bushi(都節) / Ryukyu(琉球) / Chinese Jiao / Egyptian Pent / Balinese Pelog
-  - SYMMETRIC / BEBOP (7): Prometheus / Tritone / Augmented /
-    Half-Whole・Whole-Half Diminished / Bebop Dominant・Major
-  - CHORD TONES (9): Major・Minor・Sus4 Triad / Maj7 / Min7 / Dom7 /
-    Min9 / Maj9 / Octaves Only
-- **APPLY TO (OSC 1 / 2 / 3)** — OSC毎に量子化の適用可否を切替。片方だけ
-  ノンクオンタイズにして滑らかな層を重ねる、といった使い方ができる。
-- 量子化はCOARSE加算の**前**に行う。OSC2を+12stすれば常に正確な1オクターブ上を保つ。
-- 量子化中はピッチ平滑の時定数を τ≒4ms → **τ≒1.2ms** に切り替え、
-  段差をはっきり出しつつクリックを回避する。
-- **デフォルトはOFF**（従来動作）。SCALEの初期値は Natural Minor / KEY=C。
+### Global (MAIN)
 
-#### Start/End キーの自動スナップ
+| Parameter | Range | Notes |
+|---|---|---|
+| **LIFT** | 0–100 % | Evaluation position of all 31 curves. Disabled in AUTO |
+| **LIFT: AUTO / MANUAL** | toggle | AUTO follows the transport; MANUAL is host-automatable |
+| **REVERSE** | on/off | Reads every curve backwards — riser ↔ downer |
+| **RANDOM** | button | Randomises MAIN and OSC ENV only, never Master/FX/Config |
+| **BARS** | 1/32 … 16 | Length of one full 0→1 sweep (10 steps) |
+| **ATTACK** | 0.1–500 ms | Amp envelope attack |
+| **RELEASE** | 5–4000 ms | Amp envelope release |
+| **OUT** | −24 … +12 dB | Master output |
+| **CEILING** | −12 … 0 dB | Limiter ceiling (mirrors CONFIG) |
 
-**KEY / SCALE / APPLY TO のいずれかを変更すると、対象OSCの Start Key と End Key が
-自動的にスケールの最寄り構成音へ再計算されます。** スナップ後はMIDIラーンや
-DAWオートメーションを含めユーザーが自由に変更でき、次にKey/Scaleを触るまで
-再スナップされません。
+### Oscillator 1–3
 
-- 対象は `APPLY TO` がONのOSCのみ。OFFのOSCのキーには一切触れない。
-- 0〜127を超える場合はオクターブ単位で内側へ折り返す。
-- **プリセット読込・セッション復元では発火しない** — プリセットが持つStart/End
-  キーがそのまま尊重される (適用直後にスナップ済み状態として記録するため)。
-- 全70スケール × 12キー × 全128ノートで、範囲内・構成音への着地・移動量6半音以内・
-  冪等性 (二重適用で変化しない) を検証済み。
+| Parameter | Range | Notes |
+|---|---|---|
+| **ON / S / M** | toggle | Enable, Solo, Mute |
+| **WAVE** | 6 modes | Sine, Triangle, Square, Saw, FM, Wavetable |
+| **POS** | 0–100 % | Morph position (Wavetable mode) |
+| **LEVEL** | 0–100 % | Curve-modulated |
+| **COARSE** | −24 … +24 st | Added after scale quantizing |
+| **UNISON** | 1–7 | Voice count |
+| **DETUNE** | 0–100 ct | Curve-modulated |
+| **SPREAD** | 0–100 % | Stereo width, curve-modulated |
+| **ST / END** | C−2 … G8 | Start/End Key, set by MIDI learn |
 
-### 追加: PITCH RAIL (Pitch ENV ライブ表示)
+### Noise
 
-Pitch ENVは「絶対音程」を扱うため、他パラメーターのようなノブ帯 (ModBand) 方式が
-使えません。そこでMAINタブの各OSC列、ST/ENDボタンのすぐ上に専用バーを新設しました。
+| Parameter | Range | Notes |
+|---|---|---|
+| **TYPE** | White / Pink / Brown | Fixed 44.1 kHz generation, SR-independent |
+| **LEVEL** | 0–100 % | Curve-modulated |
+| **PITCH** | 20 Hz – 20 kHz | Band-pass centre, curve-modulated |
+| **RES** | 0.5–12 | Band-pass Q, curve-modulated |
+| **RANGE** | 0–10 oct | Depth of the pitch curve |
 
-- **左端 = Start Key / 右端 = End Key** に正規化した軌道
-  (上昇・下降どちらでも左→右が進行方向)
-- 現在ピッチまでの塗りつぶし + **ライブドット**
-- 中央に**現在の音名をリアルタイム表示** (例 `E3`)。
-  非量子化時でセント誤差が5cent以上あれば `E3 +23` のように併記
-- **Scaleクオンタイズ有効時は、Start〜End区間に含まれるスケール構成音の位置に
-  目盛りを描画** — 「今どの音を踏んでいるか」「次にどこへ跳ぶか」が一目で分かる
-- 発音していないときもENV評価位置に追従するため、LIFT MANUALでノブを動かすだけで
-  ピッチを確認できる
-- 更新は VBlank同期 (画面リフレッシュレート)。値が動いたときだけ再描画
+### Filter 1–4
 
-### 修正: サンプルレート依存の解消 (44.1 / 48 / 88.2 / 96 / 176.4 / 192kHz)
+| Parameter | Range | Notes |
+|---|---|---|
+| **ENABLE** | on/off | |
+| **ROUTE** | OSC1/2/3/Noise | Per-source pass or bypass |
+| **TYPE** | LP / HP / BP / Notch | ZDF/TPT SVF |
+| **CUTOFF** | 20 Hz – 20 kHz | |
+| **RES** | 0.5–12 | |
+| **ENV AMT** | −100 … +100 % | Curve × ±10 octaves |
 
-- **コントロールティック平滑がSR依存だった問題** — LIFT/DETUNE/SPREAD/
-  FILTER CUTOFF/RES/NOISE CUTOFF・RESの平滑係数が固定値 (0.3 / 0.35 / 0.5) で、
-  ティック間隔 (32サンプル) が短くなる高SRでは実時間の時定数が最大**4.4倍速く**なり、
-  44.1kHzと96/192kHzで音が変わっていた。実時間τから係数を算出する方式へ変更し、
-  全SRで44.1kHz時と同一の挙動になった。
-- **ノイズオシレーターのSR依存** — Pink (Paul Kellett) / Brown の係数は44.1kHz設計で、
-  高SRではフィルターの折れ点が周波数軸上へ持ち上がり「明るいピンク/ブラウン」に
-  なっていた。Whiteも帯域がNyquistまで広がり192kHzでは可聴帯域のパワーが
-  約6dB低下していた。→ **ノイズ生成を44.1kHz固定クロックで行い線形補間で
-  ホストSRへ伸ばす**方式に変更。全SRでスペクトルとレベルが一致する
-  (44.1kHz時は補間係数1.0で従来と同一出力)。
-- FILTER / NOISE CUTOFF のターゲット値を 20Hz〜0.45×SR にクランプ。
+### FX
 
-### 修正: 安定性・堅牢性
-
-- **モノラル出力のダウンミックス係数バグ** — `L + 0.5×R` になっており、
-  モノ環境で約1.5倍の音量かつ左右バランスが崩れていた (UNISON SPREAD時に顕著)。
-  `0.5×L + 0.5×R` へ修正。
-- **DAW再起動でプリセット名が失われる問題** — プリセット名がステートに保存されて
-  おらず、復元後は常に "Init" 表示になっていた。ステートへ保存/復元するよう修正。
-- **ブロックサイズ超過での無音** — ホストが `prepareToPlay` の申告値より大きい
-  ブロックを渡すと (オフラインバウンス/フリーズ等) 無音+リセットになっていた。
-  申告値の2倍または8192サンプルの大きい方を事前確保して吸収する。
-- **ノートオン時の平滑スナップ漏れ** — FILTER CUTOFF/RES、NOISE CUTOFF/RES、
-  DETUNE/SPREAD がスナップ対象外で、前ノート終端の値からグライドしていた。
-  発音頭の意図しないスイープを解消。`hardReset()` の初期化漏れ (cutSm/noiseCutSm) も修正。
-- **プリセット◀▶ナビゲーション** — Factory/Userで同名プリセットがあると
-  位置を見失っていた。読込元 (Factoryインデックス / Userファイル) で追跡する方式へ変更。
-- **カーブ復元** — ステート/プリセットに CURVES が無い、または旧バージョンの場合は
-  デフォルトへ戻す (前プリセットのカーブが残る事故を防止)。
-- 存在しないファイルの読込、範囲外プリセットインデックス等のガードを追加。
-- **キャプチャバッファのメモリ削減** — 30秒固定確保のため 192kHz で 46MB を
-  常時確保していた。サンプル数上限 (1chあたり300万) を設けて**最大約24MB**に抑制。
-  96kHz以下は従来通り30秒フル、192kHzで約15.6秒 (16小節/128BPM = 30秒相当なので
-  実用上の不足はほぼ無い)。複数インスタンス立ち上げ時のメモリ消費が半減する。
-
-### 追加: ファクトリープリセット +40 (計70種)
-
-新カテゴリ **Scale Riser** (12種, スケールクオンタイズ活用) /
-**Dubstep** (4) / **DnB** (3) / **Hardstyle** (2) / **Ambient** (4) を追加。
-既存カテゴリにも EDM +4 / Trance +3 / Techno +3 / Cinematic +3 / Downer +2 を追加。
-
-## v0.3.2 修正/追加
-
-- **フィルターENVをフルレンジ化** — 従来±5octだったため20Hz起点でカーブ上端でも
-  640Hz止まりだった。±10oct (20Hz..20kHz全域相当) に変更し、カーブ上端で
-  ノブ位置に関わらず最大値へ到達する (ノブの帯表示も同スケール)。
-- **ノブARC色のテーマ連動** — ノブは accentId を持ち、描画時に現在テーマから
-  色を解決。テーマ変更が開いたままのウィンドウにも即反映される。
-- **UI説明文を英語化** — 各タブのヒント/Limiter説明/バナー等。
-- **ヘッダー再配置** — バージョン情報はCONFIGタブへ移動。ロゴ側に
-  LIFT:AUTO/MANUALと全タブを左寄せし、右側に現在プリセット名と◀▶ボタン
-  (Factory+Userを順送り) を配置。
-- **ENVエディタ: Snap+補助線** — 各カーブ画面右上に CURVES / SNAP / 解像度コンボ
-  (4/8/16/32/64分割)。SNAP ONでポイントX座標がグリッドへ吸着、補助線を表示。
-- **カーブプリセット20種+Save/Load** — CURVESボタンから Linear/Exp/Log/S-Curve/
-  Steps/Saw/Pulse/Zigzag等を即適用。"Save Current..."で名前を付けて保存し、
-  User Curvesサブメニューから読込 (%APPDATA%/LIFT-X/Curves)。
-
-## v0.3.1 修正
-
-- ビルドエラー修正 (buildStateTreeのconst違反) / Font警告修正 / W3-W4競合解消
-- **デフォルトを AUTO + LIFT 0% に変更** — 旧デフォルト(MANUAL+100%)では
-  ENV評価位置が終端になり、StartKeyではなくEndKey側で発音されていた。
-  ※ Pitch ENV自体はSt/EndKeyの範囲内で正確に動作 (カーブ下端=StartKey、
-  上端=EndKey。COARSEノブは意図的なオフセットとして範囲外へ加算可能)
-- **ENVをフルレンジ化** — 中央=ノブ現在値、上端=パラメーター最大値方向、
-  下端=最小値方向 (クランプ付き)。ノブ0で下方向に描いても変化なし、
-  ノブ0でも上端まで描けば最大値に到達する。ノブの帯表示もDSPと同一スケール。
-- **ノブの変化幅表示を常時化** — 帯(白色・視認性向上)とライブドット(現在値)を
-  常にノブへ表示し、再生中はリアルタイムに動く。
-
-## v0.3 追加機能
-
-- **LIFTノブの新仕様** — LIFT = 全マルチENVの評価位置(カーブのX座標)。
-  - MANUAL: ノブ位置がそのままENV位置。68%で止めればその時点の音を維持し、
-    ノブを動かさない限り変化しない。DAWオートメーション可能。
-  - AUTO: Progress(0→1)がENV位置になり、ノブも連動して動く。
-- **Bars拡張** — 1/32, 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8, 16小節。
-- **録音長の厳密化** — キャプチャは「設定Bar分の本編 + FXテール1.5秒」で確定。
-  鍵盤を押し続けてもBar数を超えて本編が録音されることはない。
-- **MASTERエリア** — ノイズ列の下に OUT(最終音量) + CEILING(リミッター天井)。
-- **マスターリミッター** — SPECTRA8のBrickLimiterを移植(瞬間アタック/レイテンシ0)。
-  CEILING/RELEASE/ON-OFFをパラメーター化。
-- **CONFIGタブ** — リミッター詳細設定 + カラーテーマ10種(Granular移植、
-  グローバル設定に永続化。完全適用はウィンドウ開き直し)。
-- **PRESETタブ** — NextGenKick2の3カラムブラウザを移植。カテゴリ(All/Factory/
-  User/Favorites)、サブカテゴリ入力、プリセット名入力、★お気に入り、検索、
-  右クリック削除に対応。
-- **ファクトリープリセット30種埋め込み** — EDM/Trance/Bass/Techno/Cinematic
-  各5種のライザー + Downer 5種。波形・ノイズ・フィルター・FX・カーブを網羅。
-
-## v0.2.1 追加機能
-
-- **LIFT MANUAL/AUTO** — ヘッダー(MAINタブ左)のトグル。押すたびに表示が
-  「LIFT: MANUAL」⇔「LIFT: AUTO」に切り替わる。AUTO時はLIFTノブがProgressに
-  連動して動的に動く (ノブは操作不可)。MANUAL時はDAWオートメーション可能。
-- **ENV変化幅のノブ表示** — マルチENVが掛かるノブに、アーク色より濃い帯で
-  変調範囲を表示し、白ドットで変調適用後の現在値を表示 (Granular ModMatrix方式)。
-  対象: OSCのLEVEL/DETUNE/SPREAD、ノイズのLEVEL/PITCH/RES、FILTERのCUTOFF、
-  FXのAMT/DRIVE/DEPTH/FB/SHIMMER/SHAPE (PitchENVは対応ノブなしのため対象外)。
-- **ライザー波形表示 + WAV書き出し** — Progressバー下に録音波形を表示。
-  ノートオンで録音開始(REC表示)、リリース+テール1.5秒で確定。ストリップを
-  DAWへドラッグすると 32bit float WAV (セッションSR、最大30秒) としてドロップできる。
-- **ブチ切れ/ノイズ対策** — 新規発音時のフィルター残留状態クリア、
-  リトリガー時の2msデクリックランプ、アタック/リリース指数エンベロープ、
-  ノートオン直後の平滑スナップ (古い値からのグライド防止)。
-
-## スムージング一覧 (全ノブ精査済み)
-
-| パラメーター | 平滑方式 |
+| Effect | Parameters |
 |---|---|
-| OSCピッチ (Key/COARSE/カーブ) | サンプル単位一次平滑 τ≒4ms (スケール量子化中は τ≒1.2ms) |
-| OSC LEVEL / ノイズLEVEL | サンプル単位 τ≒4ms |
-| WT POSITION | サンプル単位 τ≒4ms |
-| DETUNE / SPREAD | ティックレート平滑 τ≒2.07ms (SR非依存) |
-| LIFT (Manual/Auto両方) | ティックレート平滑 τ≒2.42ms (SR非依存) |
-| FILTER CUTOFFカーブ | ティックレート平滑 τ≒1.45ms + ZDF/TPT (高速スイープ安定) |
-| FILTER RES / ノイズRES | ティックレート平滑 τ≒2.07ms (SR非依存) |
-| Sat AMT/DRIVE, Cho AMT/DEPTH, Rev SHIMMER, Duck AMT/SHAPE | サンプル単位 τ≒10ms (FxChain内) |
-| Delay AMT/FB | サンプル単位 τ≒15ms (FX内部) |
-| Delay TIME | サンプル単位 τ≒20ms (テープ式リピッチ) |
-| Reverb Wet | FX内部平滑 (蓄積解放バースト防止) |
-| Ducking ゲイン | 非対称平滑 (dip 2ms / 復帰 12ms) + PPQ位相同期 |
-| MASTER | LinearSmoothedValue 20ms |
-| アンプ | 指数A/R + リトリガー時の2段階デクリック (フェードアウト1.5ms → 無音時にリセット → フェードイン1.5ms) |
+| **Saturation** | AMT, ALGO (10), DRIVE 1–12, PRE HPF 20–2000 Hz, TRIM ±12 dB |
+| **Chorus** | AMT, RATE 0.05–8 Hz, DEPTH, WIDTH |
+| **Delay** | AMT, TIME (1/2 … 1/16T), FB 0–95 %, DUCK, DAMP |
+| **Reverb** | AMT, DECAY, SHIMMER, DAMP, MOD |
+| **Ducking** | AMT, RATE (1 Bar … 1/64), SHAPE 0.5–8 |
 
-(ATTACK/RELEASE/UNISON/WAVE種別/Key値は係数・離散値のため平滑対象外。
-WAVE種別の切替は発音中に行うと波形が瞬時に変わります)
+All five have a **ROUTE** row for OSC 1–3 and Noise.
 
-**v0.4以降、ティックレート系の平滑は実時間の時定数から係数を算出するため、
-44.1kHz〜192kHzのどのサンプルレートでも同じ聴感になります。**
-ノートオン時は上記すべてがターゲット値へ即スナップし、前ノートの残り値から
-グライドすることはありません。
+### Config
 
-## コンセプト
+| Parameter | Range | Notes |
+|---|---|---|
+| **SCALE QUANTIZE** | on/off | Default off |
+| **KEY** | C … B | |
+| **SCALE** | 70 scales | Grouped by category |
+| **APPLY TO** | OSC 1/2/3 | Per-oscillator |
+| **LIMITER ON** | on/off | Brick-wall, zero latency, no PDC |
+| **CEILING** | −12 … 0 dB | |
+| **RELEASE** | 20–1000 ms | |
+| **COLOR THEME** | 10 themes | Midnight, Sakura, Ocean, Forest, Sunset, Mono, Neon, Vaporwave, Amber, Arctic |
 
-MIDIノートオンをトリガーに、DAWのPPQ(トランスポート)へ同期して
-指定Bar数 (1 / 2 / 4 / 8 / 16) で **Progress 0.0→1.0** を進め、
-**31系統のマルチポイント・カーブ (マルチENV)** がピッチ・レベル・デチューン・
-スプレッド・フィルター・FXパラメーターを一斉にスイープさせます。
+### Curve Editor
 
-## 構成 (v0.2 確定仕様)
+<img src="Source/Assets/OSCEnv.jpg" width="700">
 
-| 項目 | 内容 |
-|---|---|
-| トリガー | ノート保持型。MIDIノートはトリガー専用 (音程には影響しない) |
-| ピッチ | OSC毎に **StartKey/EndKey を絶対指定** (例 D3→G7)。ボタンを押してMIDI鍵盤で設定 (MIDIラーン)。Pitch ENVカーブ(下=Start/上=End)がスイープを描く |
-| オシレーター | 3基。WAVEコンボ (Sine/Triangle/Square/Saw/FM/**Wavetable**) + POSITIONノブ + 波形表示。OSC毎に ON / **SOLO / MUTE** |
-| カスタムWT | OSC毎に個別ロード。ブラウザ(サブフォルダ=カテゴリの2ペイン) + **RANDOM**。登録フォルダはグローバル設定へ永続化 (SPECTRA8方式) |
-| ノイズ | White/Pink/Brown → 専用TPTバンドパス。SOLO/MUTE対応 |
-| フィルター | ZDF/TPT SVF ×4 (LP/HP/BP/Notch)。**ソース別ルーティング**: 各フィルターにOSC1-3/ノイズを個別に通す/バイパスする点灯式ボタン (内部は4×4=16基のSVF) |
-| FX | 5スロット (適用順序を選択)。Saturation / Chorus / Delay / Reverb / Ducking。Duckingレートは 1Bar〜1/64 (付点・三連対応, PPQ同期)。**エフェクト毎にソース別ルーティング** (OSC1-3/Noiseを個別にバイパス) |
-| マルチENV | 31カーブ: OSC1-3 (PITCH/LEVEL/DETUNE/SPREAD) + ノイズ (PITCH/LEVEL/RES) + FILTER1-4 + FX (Sat:AMT,DRIVE / Cho:AMT,DEPTH / Dly:AMT,FB,TIME / Rev:AMT,SHIMMER / Duck:AMT,RATE,SHAPE) |
-| ENVの効き方 | **バイポーラ加算式**: カーブ中央=ノブ現在値、上下でパラメーターレンジ半分を±加算 (クランプ付き)。OSCピッチのみ Start→End のユニポーラ補間。Delay TIME/Duck RATEは±2オクターブの拍長変調 (下げるほど加速) |
-| 単位表示 | 簡素化 (%, Hz/k, ms/s, st, ct, dB, oct, ノート名)。内部解像度はフル |
-| GUI | タブ方式: MAIN / **OSC ENV** (ソース×ターゲットの入れ子タブ) / FILTER / FX (FX毎ENV入れ子タブ)。ダークテーマ×パステル |
-| SR対応 | 44.1〜192kHz (全バッファをprepareToPlayでSR依存確保) |
+* **Double-click** to add or remove a point, **drag the diamond** on a segment to bend it.
+* **CURVES** opens 28 factory shapes plus "Save Current…" and your saved user curves.
+* **SNAP** locks point X positions to a 4/8/16/32/64 grid with guide lines.
+* Bipolar curves show a centre line: **centre = knob value, top = maximum, bottom = minimum**.
 
-### カーブエディタ操作
 
-- ポイントをドラッグ: 移動 (端点はX固定) / 空白ダブルクリック: 追加 (最大32)
-- ポイントをダブルクリック / Alt+クリック: 削除
-- セグメント中央の◆をドラッグ: テンション調整、ダブルクリックでリセット
-- ノブは右クリックで数値直接入力
-
-## リアルタイム安全設計
-
-- `processBlock` 内のメモリアロケーション/ロック一切なし (prepareToPlayで事前確保)
-- カーブのGUI→オーディオ通信はatomicインデックスのロックフリーSPSC (リング8面×31)
-- DAWフェイルセーフ: SR/ブロックサイズ不一致検知で即ゼロクリア+リセット (Ableton Live対策)
-- カーブはAPVTS外で管理 → ホストオートメーション巻き戻りが構造的に発生しない
-- MIDIラーンはaudio→GUIをatomicカウンタで通知し、パラメーター変更はGUIスレッドから実行
-- GUI: `juce::VBlankAttachment` によるプレイヘッド同期アニメーション、paint内のPath再確保なし
-
-### 計画書からの変更点
-
-- `juce_audio_processors_headless` はJUCE 8に存在しないため、標準モジュール構成 +
-  ソースレベルのDSP/GUI完全分離で同目的を達成
-- SIMDはSoAレイアウト+自動ベクトル化のスカラー設計 (SPECTRA8の知見に準拠)
-- v0.2でFreezeを削除、Duckingを追加 (5スロット順序選択式)
-
-## ビルド
+## Signal Flow
 
 ```
+MIDI note (trigger only)
+   │
+   ├─ Transport sync (PPQ) ──► Progress 0→1 over BARS
+   │                              │
+   │                    LIFT (AUTO=Progress / MANUAL=knob)
+   │                              │  × REVERSE → 1-pos
+   │                              ▼
+   │                    ┌── 31 curves evaluated at one playhead ──┐
+   │                    │                                          │
+   ▼                    ▼                                          ▼
+OSC 1 ─ wavetable ─ unison ─┐                            Filter cutoff/res
+OSC 2 ─ wavetable ─ unison ─┤─ per-source filter routing        FX params
+OSC 3 ─ wavetable ─ unison ─┤   (4 filters × 4 sources)
+Noise ─ band-pass ──────────┘
+   │
+   ▼
+4 separate source buses ──► FX chain (5 slots, per-effect source routing)
+   │                          Saturation / Chorus / Delay / Reverb / Ducking
+   ▼
+Bus sum ──► Master gain ──► Safety clip ──► Brick-wall limiter ──► Output
+                                                     │
+                                                     └─► Riser capture → WAV drag
+```
+
+Pitch is computed as `StartKey + (EndKey − StartKey) × curve`, optionally snapped to Key + Scale, then COARSE is added.
+
+
+## Real-Time Safety
+
+* **No allocation or locking in `processBlock`.** Every buffer — oscillator tables, filter states, source buses, FX delay lines, the capture buffer — is sized in `prepareToPlay`.
+* **Lock-free curve publishing.** The editor writes into an 8-slot ring per curve and publishes an atomic index; the audio thread only ever reads.
+* **Sample-rate independent smoothing.** Control-tick coefficients are derived from real-time constants, so 44.1 kHz and 192 kHz behave identically. Noise is generated on a fixed 44.1 kHz clock and interpolated, keeping the Pink/Brown spectrum and White level constant across sample rates.
+* **Two-stage declick on retrigger.** A note-on during playback fades out over 1.5 ms, performs every reset while the output is exactly zero, then fades back in — so phase resets, smoother snaps and filter clears can never produce a step.
+* **DAW fail-safe layer.** Sample-rate mismatch or an absurd block size clears the buffer and resets the engine instead of producing garbage. Block sizes larger than the host advertised are absorbed by generous pre-allocation.
+* **Bounded state.** Filter and noise cutoff targets are clamped to 20 Hz – 0.45 × SR, delay feedback tops out at 0.95, inter-slot soft clipping sits between FX slots, and a brick-wall limiter guards the output.
+* **Background-safe file work.** Wavetable decoding, FFT mip building and preset I/O run on the message thread; the audio thread reads an atomic pointer that is never freed while it might be in use.
+
+
+## 📚 Manual
+
+Quick manuals covering every tab and parameter, plus starting-point settings and troubleshooting:
+
+[ ![Manual (EN)](https://img.shields.io/badge/Manual-English-blue?style=for-the-badge) ](Source/Assets/LIFTX_Manual_EN.md)
+[ ![Manual (JP)](https://img.shields.io/badge/Manual-日本語-red?style=for-the-badge) ](Source/Assets/LIFTX_Manual_JP.md)
+
+
+## Installation
+
+1. Download `LIFT-X.vst3` from the Releases page.
+2. Copy it to your VST3 directory:
+   ```
+   C:\Program Files\Common Files\VST3\
+   ```
+3. Rescan plugins in your DAW.
+
+### Build Requirements
+
+* **JUCE** 8.0.x — place at `C:/JUCE` or update `JUCE_PATH` in `CMakeLists.txt`
+* **CMake** 3.22 or higher
+* **Visual Studio** 2022 (MSVC, C++20)
+
+```bash
 cmake -B build -DJUCE_PATH=C:/JUCE
 cmake --build build --config Release
 ```
 
-(Visual Studio 2022 の「フォルダーを開く」+ CMakeSettings でも可)
+`COPY_PLUGIN_AFTER_BUILD` is enabled, so the VST3 is copied to the system VST3 folder automatically after a successful build.
 
-## ファイル構成
 
-```
-Source/
-  PluginProcessor.h/.cpp   プロセッサー (APVTS/フェイルセーフ/DAW同期/Learn/グローバル設定)
-  PluginEditor.h/.cpp      タブ式エディタ (MAIN/OSC ENV/FILTER/FX)
-  DSP/                     (GUI非依存)
-    Wavetable.h            MorphWavetable (SPECTRA8移植, ビルトイン/カスタム選択API)
-    CurveData.h            31系統マルチENV + ロックフリーCurveStore
-    ZdfFilter.h            TPT/ZDF SVF (Simper)
-    ScaleQuantizer.h       スケール量子化 (70種の音階テーブル)
-    RiserEngine.h          シンセコア (Key指定ピッチ/Solo/Mute/ソース別ルーティング)
-    FxChain.h              5スロットFX (Sat/Cho/Dly/Rev/Duck, PPQ同期Ducking)
-  GUI/
-    ColorPalette.h         ダークテーマ (Granular Midnight系)
-    ArcDial / ValueKnob / GlowToggle
-    CurveEditor.h/.cpp     マルチポイントカーブエディタ (VBlank同期)
-    WaveDisplay.h          OSC毎の波形表示
-    PitchRail.h            Pitch ENV ライブ表示 (音名+スケール目盛り, VBlank同期)
-    WavetableBrowser.h/.cpp カテゴリ式WTブラウザ (RANDOM/FACTORY/ADD DIR)
-    MainPanel / OscEnvPanel / FilterPanel / FxPanel
-```
+## System Requirements
+
+* **OS:** Windows 10 / 11 (64-bit)
+* **Format:** VST3 / Standalone
+* **Sample rates:** 44.1 – 192 kHz
+* **Tested Host:** Ableton Live 11 / 12
+
+> ⚠️ **Compatibility Notice:** Verified operation is confirmed in **Ableton Live**. Other DAWs may work but are currently unverified.
+
+
+## Tips
+
+* **Start from a preset, then redraw one curve.** The factory bank is built so that changing a single Pitch or Filter curve gives you a different riser rather than a broken one.
+* **Stepped climbs that stay in key:** turn on Scale Quantize, pick Minor Pentatonic, and set an oscillator's Start/End three octaves apart. The pitch walks up the scale instead of gliding.
+* **Layer stepped and smooth:** leave OSC 2 out of APPLY TO so it glides underneath the quantized OSC 1. The two together read as one instrument.
+* **Turn any riser into a downer:** press REVERSE. Every curve — pitch, filter, FX — flips at once, which is far more convincing than reversing the pitch alone.
+* **Feed only the noise to the delay.** On the DELAY tab switch OSC 1–3 off in ROUTE and leave NOISE on. The tonal layer stays dry while the noise builds a rhythmic tail.
+* **Keep the sub clean:** on the REVERB tab, switch off the oscillator carrying the low octave. The top stays wide and the bottom stays defined.
+* **RANDOM as a starting point.** It only touches MAIN and OSC ENV, so you can keep an FX chain you like and reroll the tonal layer underneath it.
+* **Draw the shape you hear.** Use a Steps 8 or 16 curve preset on Pitch for machine-gun risers, and an Exp Up (Hard) on Filter for the classic late-opening sweep.
+* **Bounce without rendering:** trigger the riser once, then drag the waveform strip straight into your arrangement as a WAV.
+
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 (AGPLv3) — see [LICENSE](LICENSE) for details.
+
+This software is built with the **JUCE 8** framework. In accordance with JUCE 8's open-source licensing terms, this entire project is distributed under the AGPLv3.
+
+
+## Credits
+
+**Developer:** @kijyoumusic (OTODESK)
+
+**Framework:** JUCE 8.0.x
+
+**Target DAW:** Ableton Live 11 / 12
+
+**DSP References:**
+- Zavalishin — *"The Art of VA Filter Design"* (TPT/SVF topology)
+- Simper (Cytomic) — *Trapezoidal integrated state-variable filters*
+- Parker, Zavalishin & Le Bivic — *"Reducing the Aliasing of Nonlinear Waveshaping Using Continuous-Time Convolution"* (ADAA, 2016)
+- Kellett — *Pink noise filter coefficients*
+- Jot & Chaigne — *"Digital Delay Networks for Designing Artificial Reverberators"* (FDN, 1991)
+
+
+## Support
+
+Found a bug or have a feature request? Please open an issue on the repository.
