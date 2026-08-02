@@ -76,13 +76,14 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     startTimerHz(30);
 }
 
-// マルチENV変化幅をCUTOFFノブへ動的表示および応答曲線更新
+// マルチENV変化幅をCUTOFF/RESノブへ動的表示および応答曲線更新
 void FilterPanel::timerCallback()
 {
     if (!isVisible()) return;
 
     const juce::String n(activeSub + 1);
-    auto* prm = proc.apvts.getParameter("flt" + n + "Cutoff");
+    auto* prmCut = proc.apvts.getParameter("flt" + n + "Cutoff");
+    auto* prmRes = proc.apvts.getParameter("flt" + n + "Res");
     const float envAmt = proc.apvts.getRawParameterValue("flt" + n + "Env")->load();
     const bool onState = proc.apvts.getRawParameterValue("flt" + n + "On")->load() > 0.5f;
     const int typeState = (int)proc.apvts.getRawParameterValue("flt" + n + "Type")->load();
@@ -103,7 +104,8 @@ void FilterPanel::timerCallback()
 
     responseDisplay.setParams(typeState, cutoffVal, resVal, liveCutoffHz, onState);
 
-    ModBand::update(cutoffKnob, prm,
+    // CUTOFF ノブの ModBand 更新
+    ModBand::update(cutoffKnob, prmCut,
                     proc.getCurves().read(CurveStore::Filter1 + activeSub), 1.0f, envPos,
                     [envAmt](float b, float bip) {
                         const float mAmt = juce::jlimit(-1.0f, 1.0f, envAmt * bip);
@@ -111,6 +113,16 @@ void FilterPanel::timerCallback()
                         const float lTgt = mAmt >= 0.0f ? lCut + mAmt * (std::log2(20000.0f) - lCut)
                                                         : lCut + mAmt * (lCut - std::log2(20.0f));
                         return juce::jlimit(20.0f, 20000.0f, std::exp2(lTgt));
+                    });
+
+    // RES ノブの ModBand 更新 (ENVによるResonance動的変化のビジュアル可視化)
+    ModBand::update(resKnob, prmRes,
+                    proc.getCurves().read(CurveStore::Filter1 + activeSub), 1.0f, envPos,
+                    [envAmt](float b, float bip) {
+                        const float mAmt = juce::jlimit(-1.0f, 1.0f, envAmt * bip);
+                        const float baseRes = juce::jlimit(0.5f, 12.0f, b);
+                        return juce::jlimit(0.5f, 12.0f, mAmt >= 0.0f ? baseRes + mAmt * (12.0f - baseRes)
+                                                                      : baseRes + mAmt * (baseRes - 0.5f));
                     });
 }
 
@@ -218,32 +230,31 @@ void FilterPanel::resized()
     typeLabel.setBounds(enableTypeRow.removeFromLeft(40));
     typeBox.setBounds(enableTypeRow);
 
-    rightArea.removeFromTop(8);
+    rightArea.removeFromTop(6);
 
-    // 2. 中央に Filterリアルタイム応答カーブ表示 (高さ 135px を確保)
-    responseDisplay.setBounds(rightArea.removeFromTop(135));
+    // 2. 下部に 3個のノブ (高さ85pxに制限し、画像2(FX画面)と同じコンパクトで美しい配置にする)
+    auto knobRowArea = rightArea.removeFromBottom(85);
 
-    rightArea.removeFromTop(8);
-
-    // 3. 下部に 3個のノブ (CUTOFF / RES / ENV AMT)
-    // ノブセルの中で上に名称ラベル(16px)、下にノブを配置
-    int knobWidth = (rightArea.getWidth() - 12) / 3;
+    int knobWidth = (knobRowArea.getWidth() - 12) / 3;
 
     auto layoutKnobCell = [](juce::Rectangle<int> area, juce::Label& l, ValueKnob& k)
     {
-        l.setBounds(area.removeFromTop(16));
-        area.removeFromTop(2);
-        k.setBounds(area);
+        l.setBounds(area.removeFromTop(15));
+        k.setBounds(area.reduced(2, 0));
     };
 
-    auto kCell1 = rightArea.removeFromLeft(knobWidth);
-    rightArea.removeFromLeft(6);
+    auto kCell1 = knobRowArea.removeFromLeft(knobWidth);
+    knobRowArea.removeFromLeft(6);
     layoutKnobCell(kCell1, cutoffLabel, cutoffKnob);
 
-    auto kCell2 = rightArea.removeFromLeft(knobWidth);
-    rightArea.removeFromLeft(6);
+    auto kCell2 = knobRowArea.removeFromLeft(knobWidth);
+    knobRowArea.removeFromLeft(6);
     layoutKnobCell(kCell2, resLabel, resKnob);
 
-    auto kCell3 = rightArea;
+    auto kCell3 = knobRowArea;
     layoutKnobCell(kCell3, envLabel, envKnob);
+
+    // 3. 余った中央上部全体を FilterResponseDisplay に割り当て
+    rightArea.removeFromBottom(6);
+    responseDisplay.setBounds(rightArea);
 }
