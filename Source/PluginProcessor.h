@@ -3,7 +3,7 @@
 // LIFT-X プロセッサー層 (v0.2)
 //  - DSPコアとGUIの完全分離 / processBlock内アロケーション・ロック禁止
 //  - DAWフェイルセーフ: SR/ブロックサイズ不一致時の即時ゼロクリア+リセット
-//  - マルチENV(31系統)はAPVTS外のCurveStoreで管理 (オートメーション隔離)
+//  - マルチENV(35系統)はAPVTS外のCurveStoreで管理 (オートメーション隔離)
 //  - OSC毎のカスタムWavetable (SPECTRA8方式のグローバル設定でフォルダ永続化)
 //  - MIDI Learn (StartKey/EndKey設定用の最終ノート通知)
 // ==========================================
@@ -42,7 +42,10 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 6.0; }
+
+    // FXの実設定 (Reverb DECAY / Delay FB+TIME) から実際の残響長を見積もって返す。
+    //  固定値だとホストのフリーズ/バウンス時に長いリバーブが切られてしまう。
+    double getTailLengthSeconds() const override;
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -68,14 +71,24 @@ public:
     int getLastNote() const noexcept { return mLastNote.load(std::memory_order_relaxed); }
 
     // ---- ライザー出力キャプチャ (波形表示 + WAV D&D用) ----
-    //  ノートオンで録音開始、リリース完了+テール1.5秒で確定。
+    //  ノートオンで録音開始。本編は「指定Bar分 or リリース完了」で打ち切り、
+    //  以降は FX のテールが実際に鳴り止むまで録り続ける (無音検知方式)。
+    //  固定秒数ではないため、Shimmer Reverb の長い減衰や FB 0.95 の Delay でも
+    //  切れ際まで確実に収録できる。
     //  GUIはバージョン増加を検知してコピーを取る (書き込み中の参照は表示専用)。
     const float* getCaptureL() const noexcept { return mCapL.data(); }
     const float* getCaptureR() const noexcept { return mCapR.data(); }
     int getCaptureLength() const noexcept { return mCapLenPub.load(std::memory_order_relaxed); }
     int getCaptureVersion() const noexcept { return mCapVersion.load(std::memory_order_relaxed); }
     bool isCapturing() const noexcept { return mCapActive.load(std::memory_order_relaxed); }
-    double getPreparedSampleRate() const noexcept { return mPreparedSampleRate; }
+    double getPreparedSampleRate() const noexcept { return juce::jmax(8000.0, mPreparedSampleRate); }
+
+    // 本編(指定Bar分)の終端サンプル位置。GUIが波形上にテール開始線を引くのに使う。
+    // 0 = まだ本編中 (テールへ入っていない)。
+    int getCaptureBodyEnd() const noexcept { return mCapBodyEndPub.load(std::memory_order_relaxed); }
+
+    // 直近のホストBPM (書き出しファイル名などGUI表示用)
+    double getLastBpm() const noexcept { return mLastBpm.load(std::memory_order_relaxed); }
 
     // ---- カスタムWavetable (OSC毎 / メッセージスレッド専用) ----
     bool loadCustomWavetable(int oscIdx, const juce::File& file);
@@ -190,21 +203,40 @@ private:
     std::atomic<int> mLastNote { -1 };
     std::atomic<int> mNoteEvents { 0 };
 
+    // 直近のホストBPM (getTailLengthSeconds はプレイヘッドを参照できないため保持)
+    std::atomic<double> mLastBpm { 120.0 };
+
     // ---- ライザー出力キャプチャ (prepareToPlayで事前確保) ----
-    //  最大30秒。ただし高SRでのメモリ肥大を防ぐためサンプル数の上限も設ける。
-    //  30秒×192kHz×2ch = 46MB になっていたため、上限を設けて約24MBへ抑える。
-    //   44.1 / 48 / 88.2 / 96kHz : 30秒フル (上限に当たらない)
-    //   176.4kHz : 約17秒 / 192kHz : 約15.6秒
-    static constexpr double kMaxCaptureSeconds = 30.0;
-    static constexpr int    kMaxCaptureSamples = 3000000;   // 1chあたり (=24MB/2ch)
+    //  最大60秒。高SRでのメモリ肥大を防ぐためサンプル数の上限も併用する。
+    //   44.1 / 48 / 88.2 / 96kHz : 60秒フル (上限に当たらない)
+    //   176.4kHz : 約34秒 / 192kHz : 約31秒
+    //  600万サンプル × 2ch × 4byte = 約48MB。
+    static constexpr double kMaxCaptureSeconds = 60.0;
+    static constexpr int    kMaxCaptureSamples = 6000000;   // 1chあたり (=48MB/2ch)
+
+    //  テール終了判定: -90dBFS を kSilenceHoldSec 連続で下回ったら鳴り止んだとみなす。
+    //  FDNリバーブは理論上は無限に減衰し続けるため、上限も併せて設ける。
+    static constexpr float  kSilenceThresh   = 3.1623e-5f;  // -90 dBFS
+    static constexpr double kSilenceHoldSec  = 0.10;        // 100ms 連続無音で確定
+    //  テール単体の上限。実質の天井はキャプチャバッファ(60秒)側なので、
+    //  ここは「万一無音判定が効かなかった場合」の保険として広めに取る。
+    //  DECAY=1.0 の Shimmer (RT60≒21秒 → -90dB到達 約32秒) が自然減衰で
+    //  収まり切るだけの余裕を確保している。
+    static constexpr double kMaxTailSeconds  = 40.0;
+
     std::vector<float> mCapL, mCapR;
-    int mCapWrite = 0;
-    int mCapRiserLen = 0;      // 設定Bar分のサンプル数 (本編はここで打ち切り)
+    int  mCapWrite = 0;
+    int  mCapRiserLen = 0;     // 設定Bar分のサンプル数 (本編はここで打ち切り)
+    int  mCapBodyEnd = 0;      // 本編終端 (テール開始位置)
     bool mCapturing = false;
-    bool mWasActive = false;
-    int mTailRemain = -1;
-    std::atomic<int> mCapLenPub { 0 };
-    std::atomic<int> mCapVersion { 0 };
+    bool mCapInTail = false;   // 本編を録り終えてテール収録中か
+    int  mCapSilentRun = 0;    // 連続して無音だったサンプル数
+    int  mCapTailWritten = 0;  // テールとして書いたサンプル数
+    int  mCapSilenceHold = 0;  // = kSilenceHoldSec * sr (prepareで算出)
+    int  mCapTailCap = 0;      // = kMaxTailSeconds  * sr (prepareで算出)
+    std::atomic<int>  mCapLenPub { 0 };
+    std::atomic<int>  mCapBodyEndPub { 0 };
+    std::atomic<int>  mCapVersion { 0 };
     std::atomic<bool> mCapActive { false };
 
     // ---- キャッシュ済みパラメーターポインタ ----

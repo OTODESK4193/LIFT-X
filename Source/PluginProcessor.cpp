@@ -5,6 +5,7 @@
 #include "PluginEditor.h"
 #include "FactoryPresets.h"
 
+#include <cmath>
 #include <cstring>
 
 // ---- グローバル設定ファイル (SPECTRA8方式) ----
@@ -467,17 +468,22 @@ void LiftXAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
         mBusR[(size_t)s].assign((size_t)mMaxBlockSize, 0.0f);
     }
 
-    // キャプチャバッファ (最大30秒・ステレオ / サンプル数上限でメモリを抑制)
+    // キャプチャバッファ (最大60秒・ステレオ / サンプル数上限でメモリを抑制)
     const size_t capSize = (size_t)juce::jlimit<juce::int64>(
         16384, (juce::int64)kMaxCaptureSamples,
         (juce::int64)(sampleRate * kMaxCaptureSeconds));
     mCapL.assign(capSize, 0.0f);
     mCapR.assign(capSize, 0.0f);
     mCapWrite = 0;
+    mCapBodyEnd = 0;
     mCapturing = false;
-    mWasActive = false;
-    mTailRemain = -1;
+    mCapInTail = false;
+    mCapSilentRun = 0;
+    mCapTailWritten = 0;
+    mCapSilenceHold = juce::jmax(64, (int)(sampleRate * kSilenceHoldSec));
+    mCapTailCap     = juce::jmax(1024, (int)(sampleRate * kMaxTailSeconds));
     mCapLenPub.store(0);
+    mCapBodyEndPub.store(0);
     mCapVersion.fetch_add(1);
     mCapActive.store(false);
 
@@ -536,6 +542,8 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
                 qnPerBar = 4.0 * (double)ts->numerator / juce::jmax(1.0, (double)ts->denominator);
         }
     }
+    // getTailLengthSeconds() はプレイヘッドを参照できないため、ここで保持しておく
+    mLastBpm.store(bpm, std::memory_order_relaxed);
 
     // ---- MIDI ----
     bool noteOnThisBlock = false;
@@ -645,61 +653,156 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
                          juce::Decibels::decibelsToGain(pLimCeiling->load()));
     }
 
-    // ---- ライザー出力キャプチャ (プラグイン最終出力 / RT安全: memcpyのみ) ----
+    // ---- ライザー出力キャプチャ (プラグイン最終出力 / RT安全: memcpy と算術のみ) ----
+    //
+    //  録音は2段階:
+    //   [本編] ノートオン → Progress が 1.0 に到達 (=指定小節分) するか、
+    //          リリースが完了するまで。Progress は PPQ 同期なのでテンポ変化に追従する。
+    //   [テール] 本編終了後、出力が実際に鳴り止むまで録り続ける。
+    //          -90dBFS を 100ms 連続で下回ったら確定し、末尾の無音を切り詰める。
+    //          → Shimmer Reverb の長い減衰や FB 0.95 の Delay でも切れ際まで入る。
     {
         const bool act = mEngine.isNoteActive();
 
         if (noteOnThisBlock)
         {
-            // 新しいライザー開始 → 録音をやり直す。
-            // 本編は設定Bar分きっかりで打ち切り、以降はFXテールのみ追加録音する。
+            // 新しいライザー開始 → 録音をやり直す
             mCapWrite = 0;
+            mCapBodyEnd = 0;
             mCapturing = true;
-            mTailRemain = -1;
+            mCapInTail = false;
+            mCapSilentRun = 0;
+            mCapTailWritten = 0;
+            mCapBodyEndPub.store(0, std::memory_order_relaxed);
+            mCapActive.store(true, std::memory_order_relaxed);
+        }
+
+        // 本編の想定長は毎ブロック再計算する (ノートオン時のBPMで固定すると
+        // テンポオートメーションでズレるため)。Progress 到達判定の保険として使う。
+        {
             const double riserSec = (bars * qnPerBar) * 60.0 / juce::jmax(20.0, bpm);
             mCapRiserLen = juce::jlimit(256, (int)mCapL.size(),
                                         (int)(riserSec * mPreparedSampleRate));
-            mCapActive.store(true, std::memory_order_relaxed);
         }
 
         if (mCapturing)
         {
             const int cap = (int)mCapL.size();
             const int nWrite = juce::jmin(numSamples, cap - mCapWrite);
+
+            const float* sl  = buffer.getReadPointer(0);
+            const float* sr2 = buffer.getNumChannels() > 1 ? buffer.getReadPointer(1) : sl;
+
             if (nWrite > 0)
             {
-                const float* sl = buffer.getReadPointer(0);
-                const float* sr2 = buffer.getNumChannels() > 1 ? buffer.getReadPointer(1) : sl;
-                std::memcpy(mCapL.data() + mCapWrite, sl, (size_t)nWrite * sizeof(float));
+                std::memcpy(mCapL.data() + mCapWrite, sl,  (size_t)nWrite * sizeof(float));
                 std::memcpy(mCapR.data() + mCapWrite, sr2, (size_t)nWrite * sizeof(float));
                 mCapWrite += nWrite;
             }
             mCapLenPub.store(mCapWrite, std::memory_order_relaxed);
 
-            // 本編終了条件: リリース完了 or 設定Bar分を録り切った (鍵盤保持でも超過しない)
-            // → 以降はFXテールを1.5秒だけ録って確定
-            const bool mainDone = !act || mCapWrite >= mCapRiserLen;
-            if (mainDone)
+            // ---- 本編 → テールへの遷移 ----
+            //  Progress 到達 (指定小節分を録り切った) か、リリース完了で本編終了。
+            if (!mCapInTail)
             {
-                if (mTailRemain < 0)
-                    mTailRemain = (int)(mPreparedSampleRate * 1.5);
-                mTailRemain -= numSamples;
-            }
-            else
-            {
-                mTailRemain = -1;
+                const bool bodyDone = !act
+                                   || mEngine.getProgressF() >= 0.99999f
+                                   || mCapWrite >= mCapRiserLen;
+                if (bodyDone)
+                {
+                    mCapInTail = true;
+                    mCapBodyEnd = mCapWrite;
+                    mCapSilentRun = 0;
+                    mCapTailWritten = 0;
+                    mCapBodyEndPub.store(mCapBodyEnd, std::memory_order_relaxed);
+                }
             }
 
-            if ((mainDone && mTailRemain <= 0) || mCapWrite >= cap)
+            // ---- テール: 実際に鳴り止むまで録る ----
+            if (mCapInTail)
             {
-                mCapturing = false;
-                mCapActive.store(false, std::memory_order_relaxed);
-                mCapVersion.fetch_add(1, std::memory_order_release);
+                // このブロックのピークを見て無音判定 (書けなかった分は無音扱い)
+                float pk = 0.0f;
+                for (int i = 0; i < nWrite; ++i)
+                    pk = juce::jmax(pk, std::abs(sl[i]), std::abs(sr2[i]));
+
+                if (pk < kSilenceThresh) mCapSilentRun += juce::jmax(nWrite, numSamples);
+                else                     mCapSilentRun = 0;
+
+                mCapTailWritten += numSamples;
+
+                const bool silent    = mCapSilentRun >= mCapSilenceHold;
+                const bool tailMaxed = mCapTailWritten >= mCapTailCap;
+                const bool bufFull   = mCapWrite >= cap;
+
+                if (silent || tailMaxed || bufFull)
+                {
+                    // 末尾の無音を切り詰める (WAVを無駄に長くしない)。
+                    // 10ms だけ余韻を残してから確定する。
+                    if (silent)
+                    {
+                        const int keep = (int)(mPreparedSampleRate * 0.01);
+                        mCapWrite = juce::jlimit(juce::jmax(256, mCapBodyEnd), mCapWrite,
+                                                 mCapWrite - mCapSilentRun + keep);
+                    }
+                    mCapLenPub.store(mCapWrite, std::memory_order_relaxed);
+                    mCapturing = false;
+                    mCapInTail = false;
+                    mCapActive.store(false, std::memory_order_relaxed);
+                    mCapVersion.fetch_add(1, std::memory_order_release);
+                }
             }
         }
-
-        mWasActive = act;
     }
+}
+
+// ==========================================================
+// テール長の申告 (ホストのフリーズ/バウンスで残響が切られないように)
+//  Reverb の DECAY と Delay の FB / TIME から RT60 を見積もる。
+//  スロットに入っていないFXは無視する。
+// ==========================================================
+double LiftXAudioProcessor::getTailLengthSeconds() const
+{
+    double tail = 0.5;   // リリース最大4秒 + 余裕は下で加算する
+
+    bool hasReverb = false, hasDelay = false;
+    for (int s = 0; s < FxChain::kNumSlots; ++s)
+    {
+        if (pFxType[(size_t)s] == nullptr) continue;
+        const int t = (int)pFxType[(size_t)s]->load();
+        if (t == FxChain::Reverb) hasReverb = true;
+        if (t == FxChain::Delay)  hasDelay = true;
+    }
+
+    // ln(0.001) = -60dB
+    constexpr double kLn60 = -6.907755;
+
+    if (hasReverb && pRevDecay != nullptr)
+    {
+        // ShimmerReverb: feedback = min(0.98, 0.5 + decay*0.48)
+        // 遅延長の平均は約62ms (31〜101ms のプライム分布)
+        const double fb = juce::jmin(0.98, 0.5 + (double)pRevDecay->load() * 0.48);
+        const double rt = 0.062 * (kLn60 / std::log(juce::jmax(1.0e-4, fb)));
+        tail = juce::jmax(tail, rt * 1.2);   // Shimmer のループ分の余裕
+    }
+
+    if (hasDelay && pDlyFb != nullptr && pDlyTime != nullptr)
+    {
+        const double bpm  = juce::jlimit(20.0, 999.0, mLastBpm.load(std::memory_order_relaxed));
+        const double beat = (double)FxChain::delayTimeToBeats((int)pDlyTime->load());
+        const double dSec = juce::jmax(0.01, beat * 60.0 / bpm);
+        const double fb   = juce::jlimit(0.0f, 0.95f, pDlyFb->load());
+        if (fb > 0.01)
+            tail = juce::jmax(tail, dSec * (kLn60 / std::log(juce::jmax(1.0e-4, (double)fb))));
+        else
+            tail = juce::jmax(tail, dSec * 2.0);
+    }
+
+    // アンプのリリース分を加算
+    if (pRelease != nullptr)
+        tail += (double)pRelease->load() * 0.001 * 3.0;
+
+    return juce::jlimit(1.0, 30.0, tail);
 }
 
 // ==========================================================
@@ -908,7 +1011,7 @@ void LiftXAudioProcessor::randomizeMainAndOsc()
     setP("noiseRange", rf(2.0f, 7.0f));
 
     // ---- OSC ENV カーブ (0-11 = OSC1-3 の Pitch/Level/Detune/Spread, 12-14 = Noise) ----
-    //  FILTER(15-18) と FX(19-30) のカーブは対象外
+    //  FILTER Cutoff(15-18) / FILTER Res(19-22) / FX(23-34) のカーブは対象外
     auto makeCurve = [](float y0, float y1, float tension)
     {
         auto s = CurveSnapshot::makeDefault(y0, y1);

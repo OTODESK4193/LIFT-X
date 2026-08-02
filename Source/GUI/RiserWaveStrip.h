@@ -4,13 +4,16 @@
 //
 //  - ノートオンで録音開始 (プロセッサー側キャプチャ)、REC表示付きで
 //    波形がリアルタイムに伸びていく
-//  - リリース完了+テール1.5秒で確定 → ストリップをDAWへドラッグすると
-//    32bit float WAV (セッションSR) としてドロップできる
+//  - 本編(指定小節分)を録り終えると、以降はFXが実際に鳴り止むまでテールを収録。
+//    波形上ではテール区間を暗く描き、境界に縦線を引いて区別できるようにする。
+//  - 確定後、ストリップをDAWへドラッグすると 32bit float WAV (セッションSR)
+//    としてドロップできる。末尾には 8ms のフェードアウトを掛けてブツ切れを防ぐ。
 // ==========================================
 #pragma once
 
 #include <JuceHeader.h>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -60,21 +63,58 @@ public:
         wavePath.closeSubPath();
 
         const bool rec = proc.isCapturing();
-        g.setColour((rec ? LiftColors::rose : LiftColors::accentMaster).withAlpha(0.75f));
-        g.fillPath(wavePath);
+        const auto waveCol = (rec ? LiftColors::rose : LiftColors::accentMaster);
+
+        // テール区間 (本編終端より後ろ) は暗く塗り分ける
+        const float bodyT = (peakLen > 0 && peakBodyEnd > 0)
+                          ? juce::jlimit(0.0f, 1.0f, (float)peakBodyEnd / (float)peakLen)
+                          : 1.0f;
+        const float bodyX = a.getX() + a.getWidth() * bodyT;
+
+        if (bodyT < 0.999f)
+        {
+            // テール側の背景をわずかに沈める
+            g.setColour(LiftColors::bg.withAlpha(0.35f));
+            g.fillRect(juce::Rectangle<float>(bodyX, a.getY(), a.getRight() - bodyX, a.getHeight()));
+        }
+
+        // 本編部分 (フル彩度)
+        {
+            juce::Graphics::ScopedSaveState ss(g);
+            g.reduceClipRegion(juce::Rectangle<float>(a.getX(), r.getY(),
+                                                      bodyX - a.getX(), r.getHeight()).toNearestInt());
+            g.setColour(waveCol.withAlpha(0.78f));
+            g.fillPath(wavePath);
+        }
+        // テール部分 (減光)
+        if (bodyT < 0.999f)
+        {
+            juce::Graphics::ScopedSaveState ss(g);
+            g.reduceClipRegion(juce::Rectangle<float>(bodyX, r.getY(),
+                                                      a.getRight() - bodyX, r.getHeight()).toNearestInt());
+            g.setColour(waveCol.withAlpha(0.40f));
+            g.fillPath(wavePath);
+
+            // 境界線
+            g.setColour(LiftColors::text.withAlpha(0.45f));
+            g.drawLine(bodyX, a.getY(), bodyX, a.getBottom(), 1.0f);
+        }
 
         // ステータス表示
         g.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
         if (rec)
         {
-            g.setColour(LiftColors::rose);
+            const bool inTail = (peakBodyEnd > 0);
+            g.setColour(inTail ? LiftColors::peach : LiftColors::rose);
             g.fillEllipse(a.getX() + 2.0f, a.getY() + 2.0f, 7.0f, 7.0f);
-            g.drawText("REC", (int)a.getX() + 13, (int)a.getY(), 60, 12, juce::Justification::centredLeft);
+            g.drawText(inTail ? "REC TAIL" : "REC",
+                       (int)a.getX() + 13, (int)a.getY(), 70, 12, juce::Justification::centredLeft);
         }
         else
         {
             g.setColour(LiftColors::text.withAlpha(0.85f));
-            g.drawText("DRAG > WAV",
+            const double sec = peakLen / juce::jmax(1.0, proc.getPreparedSampleRate());
+            g.drawText("DRAG > WAV  " + juce::String(sec, 1) + "s",
                        getLocalBounds().reduced(8, 2), juce::Justification::topRight);
         }
     }
@@ -110,6 +150,7 @@ private:
             if (len != lastLiveLen)
             {
                 lastLiveLen = len;
+                peakBodyEnd = proc.getCaptureBodyEnd();
                 rebuildPeaks(proc.getCaptureL(), proc.getCaptureR(), len);
                 repaint();
             }
@@ -130,6 +171,7 @@ private:
                 std::memcpy(ownL.data(), proc.getCaptureL(), (size_t)n * sizeof(float));
                 std::memcpy(ownR.data(), proc.getCaptureR(), (size_t)n * sizeof(float));
             }
+            peakBodyEnd = juce::jlimit(0, n, proc.getCaptureBodyEnd());
             exportDirty = true;
             rebuildPeaks(ownL.data(), ownR.data(), n);
             repaint();
@@ -157,12 +199,28 @@ private:
         }
     }
 
+    // ファイル名: LIFTX_<プリセット名>_<BPM>bpm_<長さ>s.wav
+    //  DAWのプールで見分けが付くように、内容が分かる名前にする。
+    juce::String makeFileName() const
+    {
+        auto nm = proc.getCurrentPresetName().trim();
+        if (nm.isEmpty()) nm = "Riser";
+        nm = juce::File::createLegalFileName(nm).removeCharacters(" ");
+
+        const double sr = proc.getPreparedSampleRate();
+        const double sec = (double)ownL.size() / juce::jmax(1.0, sr);
+        const int bpm = (int)std::round(proc.getLastBpm());
+
+        return "LIFTX_" + nm + "_" + juce::String(bpm) + "bpm_"
+             + juce::String(sec, 1) + "s_" + juce::String(lastVersion) + ".wav";
+    }
+
     juce::File writeWavFile()
     {
         auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
                        .getChildFile("LIFT-X");
         dir.createDirectory();
-        auto f = dir.getChildFile("LIFTX_Riser_" + juce::String(lastVersion) + ".wav");
+        auto f = dir.getChildFile(makeFileName());
 
         if (exportDirty || !f.existsAsFile())
         {
@@ -176,8 +234,24 @@ private:
                     os.release(); // 以後 writer がストリームを所有
                     std::unique_ptr<juce::AudioFormatWriter> w(writer);
                     const int n = (int)ownL.size();
-                    const float* chans[2] = { ownL.data(), ownR.data() };
-                    juce::AudioBuffer<float> buf(const_cast<float**>(chans), 2, n);
+
+                    // 末尾 8ms に線形フェードを掛けてブツ切れを防ぐ。
+                    // ownL/ownR はエクスポート専用のローカルコピーなので破壊してよいが、
+                    // 二重適用を避けるため作業用バッファへコピーしてから処理する。
+                    juce::AudioBuffer<float> buf(2, n);
+                    buf.copyFrom(0, 0, ownL.data(), n);
+                    buf.copyFrom(1, 0, ownR.data(), n);
+
+                    const int fade = juce::jmin(n / 4,
+                        (int)(proc.getPreparedSampleRate() * 0.008));
+                    if (fade > 1)
+                    {
+                        buf.applyGainRamp(0, n - fade, fade, 1.0f, 0.0f);
+                        // 先頭にも 1ms のフェードインを入れて DC 段差を消す
+                        const int fin = juce::jmin(fade, (int)(proc.getPreparedSampleRate() * 0.001));
+                        if (fin > 1) buf.applyGainRamp(0, 0, fin, 0.0f, 1.0f);
+                    }
+
                     w->writeFromAudioSampleBuffer(buf, 0, n);
                     exportDirty = false;
                 }
@@ -190,6 +264,7 @@ private:
 
     std::array<float, kCols> peakMin {}, peakMax {};
     int peakLen = 0;
+    int peakBodyEnd = 0;      // 本編終端 (0 = まだ本編中)
     int lastVersion = -1;
     int lastLiveLen = -1;
     bool dragging = false;
