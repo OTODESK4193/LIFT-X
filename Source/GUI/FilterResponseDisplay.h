@@ -68,7 +68,7 @@ public:
             {
                 float x = area.getX() + (float)i;
                 float f = xToFreq(x, area);
-                float magDb = calculateMagnitudeDb(f, cutoff, res, filterType);
+                float magDb = calculateMagnitudeDb(f, liveCutoff, res, filterType);
                 float y = dbToY(magDb, area);
 
                 if (first)

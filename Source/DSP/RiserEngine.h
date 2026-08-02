@@ -481,12 +481,10 @@ private:
             const auto& po = p.osc[(size_t)o];
 
             // PITCH: StartKey→EndKey のユニポーラ補間 (+COARSE)
-            //  Scaleクオンタイズ ON かつ当該OSCが有効なら、COARSE加算「前」の
-            //  絶対ピッチをスケール構成音へスナップする。
-            //  (COARSEを後で足すことで、OSC2を+12stしたときの相対関係が保たれる)
             const float ky = uni(CurveStore::oscCurve(o, 0));
             float basePitch = (float)po.keyStart
                             + ((float)po.keyEnd - (float)po.keyStart) * ky;
+
             const bool quant = p.scaleOn && po.scaleQ;
             if (quant)
                 basePitch = ScaleQuantizer::quantize(basePitch, p.scaleKey, p.scaleType);
@@ -544,19 +542,28 @@ private:
             noiseFilter.setCoef(noiseCutSm, noiseResSm);
         }
 
-        // フィルター: フルレンジ (±10oct ≒ 20Hz..20kHz全域) × ENV AMT
-        //  カーブ上端でノブ位置に関わらず最大値へ到達できる (クランプ付き)
+        // フィルター: フルレンジ (20Hz..20kHz全域) × ENV AMT
         for (int j = 0; j < kNumFilters; ++j)
         {
             if (!p.flt[(size_t)j].on) continue;
-            const float target = juce::jlimit(20.0f, (float)(sr * 0.45),
-                p.flt[(size_t)j].cutoff
-                * std::exp2(p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j) * 10.0f));
-            cutSm[(size_t)j] += cutTickCoef * (target - cutSm[(size_t)j]);
-            resSm[(size_t)j] += modTickCoef * (p.flt[(size_t)j].res - resSm[(size_t)j]);
+            const float modAmount = juce::jlimit(-1.0f, 1.0f, p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j));
+            const float maxCutHz = (float)(sr * 0.45);
+            const float baseCutHz = juce::jlimit(20.0f, maxCutHz, p.flt[(size_t)j].cutoff);
+            const float logCut = std::log2(baseCutHz);
+            const float logTarget = modAmount >= 0.0f ? logCut + modAmount * (std::log2(maxCutHz) - logCut)
+                                                       : logCut + modAmount * (logCut - std::log2(20.0f));
+            const float target = juce::jlimit(20.0f, maxCutHz, std::exp2(logTarget));
 
-            // ノートオン直後はスナップ (前ノート終端のカットオフからのグライド防止)
-            if (snapNext) { cutSm[(size_t)j] = target; resSm[(size_t)j] = p.flt[(size_t)j].res; }
+            const float baseRes = juce::jlimit(0.5f, 12.0f, p.flt[(size_t)j].res);
+            const float resTarget = juce::jlimit(0.5f, 12.0f,
+                modAmount >= 0.0f ? baseRes + modAmount * (12.0f - baseRes)
+                                  : baseRes + modAmount * (baseRes - 0.5f));
+
+            cutSm[(size_t)j] += cutTickCoef * (target - cutSm[(size_t)j]);
+            resSm[(size_t)j] += modTickCoef * (resTarget - resSm[(size_t)j]);
+
+            // ノートオン直後はスナップ (前ノート終端からのグライド防止)
+            if (snapNext) { cutSm[(size_t)j] = target; resSm[(size_t)j] = resTarget; }
 
             for (int s = 0; s < kNumSources; ++s)
             {

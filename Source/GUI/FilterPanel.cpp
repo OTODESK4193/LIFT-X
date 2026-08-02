@@ -38,12 +38,11 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     {
         k.setSliderStyle(juce::Slider::RotaryVerticalDrag);
         k.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 62, 14);
-        k.setColour(juce::Slider::rotarySliderFillColourId, LiftColors::accentFilter);
         k.getProperties().set("accentId", (int)LiftColors::IdBabyBlue); // テーマ連動
         addAndMakeVisible(k);
 
         l.setText(text, juce::dontSendNotification);
-        l.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+        l.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
         l.setColour(juce::Label::textColourId, LiftColors::textDim);
         l.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(l);
@@ -211,35 +210,40 @@ void FilterPanel::resized()
     // 左2/3: Env画面
     editor.setBounds(leftArea);
 
-    // 右1/3: 上半分にFilterカーブ描画 (FilterResponseDisplay), 下半分にノブ群
-    int responseHeight = rightArea.getHeight() * 4 / 10; // 上部 40%
-    responseDisplay.setBounds(rightArea.removeFromTop(responseHeight));
-    rightArea.removeFromTop(6);
-
-    // 右1/3の下半分: ENABLE / TYPE 行 と 3個のノブ (CUTOFF / RES / ENV AMT)
+    // 右1/3:
+    // 1. 最上部に ENABLE ボタン と TYPE コンボ
     auto enableTypeRow = rightArea.removeFromTop(26);
     onToggle->setBounds(enableTypeRow.removeFromLeft(80));
-    enableTypeRow.removeFromLeft(6);
+    enableTypeRow.removeFromLeft(8);
     typeLabel.setBounds(enableTypeRow.removeFromLeft(40));
-    typeComboArea:
     typeBox.setBounds(enableTypeRow);
 
-    rightArea.removeFromTop(6);
+    rightArea.removeFromTop(8);
 
-    // ノブ3個を横に均等配置
+    // 2. 中央に Filterリアルタイム応答カーブ表示 (高さ 135px を確保)
+    responseDisplay.setBounds(rightArea.removeFromTop(135));
+
+    rightArea.removeFromTop(8);
+
+    // 3. 下部に 3個のノブ (CUTOFF / RES / ENV AMT)
+    // ノブセルの中で上に名称ラベル(16px)、下にノブを配置
     int knobWidth = (rightArea.getWidth() - 12) / 3;
-    
+
+    auto layoutKnobCell = [](juce::Rectangle<int> area, juce::Label& l, ValueKnob& k)
+    {
+        l.setBounds(area.removeFromTop(16));
+        area.removeFromTop(2);
+        k.setBounds(area);
+    };
+
     auto kCell1 = rightArea.removeFromLeft(knobWidth);
     rightArea.removeFromLeft(6);
-    cutoffLabel.setBounds(kCell1.removeFromTop(14));
-    cutoffKnob.setBounds(kCell1);
+    layoutKnobCell(kCell1, cutoffLabel, cutoffKnob);
 
     auto kCell2 = rightArea.removeFromLeft(knobWidth);
     rightArea.removeFromLeft(6);
-    resLabel.setBounds(kCell2.removeFromTop(14));
-    resKnob.setBounds(kCell2);
+    layoutKnobCell(kCell2, resLabel, resKnob);
 
     auto kCell3 = rightArea;
-    envLabel.setBounds(kCell3.removeFromTop(14));
-    envKnob.setBounds(kCell3);
+    layoutKnobCell(kCell3, envLabel, envKnob);
 }
