@@ -281,7 +281,7 @@ private:
     struct OscPtrs
     {
         std::atomic<float> *on, *solo, *mute, *wave, *pos, *level,
-                           *coarse, *uni, *det, *spread, *keyStart, *keyEnd, *scaleQ;
+                           *coarse, *fine, *uni, *det, *spread, *keyStart, *keyEnd, *scaleQ;
     };
     std::array<OscPtrs, RiserEngine::kNumOscs> pOsc {};
 
@@ -310,6 +310,10 @@ private:
                        *pRevDamp = nullptr, *pRevMod = nullptr;
     std::atomic<float> *pDuckAmt = nullptr, *pDuckRate = nullptr, *pDuckShape = nullptr;
     std::atomic<float> *pLimOn = nullptr, *pLimCeiling = nullptr, *pLimRelease = nullptr;
+
+    // v0.5 追加: Key Follow / Velocity モジュレーション
+    std::atomic<float> *pKeyFollow = nullptr;
+    std::atomic<float> *pVelToCutoff = nullptr, *pVelToNoise = nullptr, *pVelToDrive = nullptr;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(LiftXAudioProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LiftXAudioProcessor)

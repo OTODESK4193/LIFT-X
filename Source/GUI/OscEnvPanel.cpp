@@ -31,6 +31,16 @@ OscEnvPanel::OscEnvPanel(LiftXAudioProcessor& p)
         proc.getCurves().publish(curveIndex(), s);
     };
 
+    // 「Paste to All」: 現在のターゲット (PITCH/LEVEL/...) を OSC1-3 全部へ複製する。
+    //  和音ライザーを作るとき、OSC1 で描いた形を 2/3 へ手作業でコピーする必要が
+    //  なくなる。ノイズは音の性質が違うため対象外。
+    editor.onPasteToAll = [this](const CurveSnapshot& s)
+    {
+        if (activeSource >= 3) return;      // ノイズ選択中は何もしない
+        for (int o = 0; o < RiserEngine::kNumOscs; ++o)
+            proc.getCurves().publish(CurveStore::oscCurve(o, activeTarget), s);
+    };
+
     hint.setFont(juce::Font(juce::FontOptions(12.0f)));
     hint.setColour(juce::Label::textColourId, LiftColors::textDim);
     hint.setJustificationType(juce::Justification::centredLeft);

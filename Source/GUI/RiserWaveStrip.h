@@ -98,7 +98,7 @@ public:
         }
 
         // ステータス表示
-        g.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
+        g.setFont(LiftFonts::mono(10.5f, true));
         if (rec)
         {
             const bool inTail = (peakBodyEnd > 0);

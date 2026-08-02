@@ -92,6 +92,31 @@ public:
         scaleInfo.setJustificationType(juce::Justification::topLeft);
         addAndMakeVisible(scaleInfo);
 
+        // ================= KEY FOLLOW / VELOCITY =================
+        setupLabel(keyFollowLabel, "KEY FOLLOW");
+        keyFollowBox.addItemList({ "Fixed", "Follow Start", "Follow End" }, 1);
+        addAndMakeVisible(keyFollowBox);
+        comboAtts.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+            proc.apvts, "keyFollow", keyFollowBox));
+
+        setupKnob(velCutKnob,   velCutLabel,   "VEL > CUTOFF",  "velToCutoff");
+        setupKnob(velNoiseKnob, velNoiseLabel, "VEL > NOISE",   "velToNoise");
+        setupKnob(velDriveKnob, velDriveLabel, "VEL > DRIVE",   "velToDrive");
+
+        playInfo.setFont(juce::Font(juce::FontOptions(11.5f)));
+        playInfo.setColour(juce::Label::textColourId, LiftColors::textDim);
+        playInfo.setText(
+            "KEY FOLLOW - by default the MIDI note is only a trigger and pitch comes "
+            "entirely from START / END. Follow Start makes the played note the starting "
+            "pitch; Follow End makes it the landing pitch (play the root of your drop and "
+            "the riser arrives on it). OSC 1's keys are the reference, so all oscillators "
+            "shift together and their intervals are preserved.\n"
+            "VELOCITY - 0% keeps the original behaviour. Above 0, playing softer darkens "
+            "the filter, pulls the noise layer back and reduces saturation drive.",
+            juce::dontSendNotification);
+        playInfo.setJustificationType(juce::Justification::topLeft);
+        addAndMakeVisible(playInfo);
+
         // ---- リミッター ----
         limOn = std::make_unique<GlowToggle>("LIMITER ON", LiftColors::accentMaster);
         addAndMakeVisible(*limOn);
@@ -154,6 +179,8 @@ public:
         g.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
         g.drawText("PITCH ENV - SCALE", scaleArea.getX(), scaleArea.getY() - 20,
                    scaleArea.getWidth(), 16, juce::Justification::centredLeft);
+        g.drawText("PLAYABILITY - KEY FOLLOW / VELOCITY", playArea.getX(), playArea.getY() - 20,
+                   playArea.getWidth(), 16, juce::Justification::centredLeft);
         g.drawText("MASTER LIMITER", limArea.getX(), limArea.getY() - 20,
                    limArea.getWidth(), 16, juce::Justification::centredLeft);
         g.drawText("APPEARANCE", themeArea.getX(), themeArea.getY() - 20,
@@ -161,17 +188,18 @@ public:
 
         g.setColour(LiftColors::panelLine);
         g.drawRoundedRectangle(scaleArea.toFloat(), 6.0f, 1.0f);
+        g.drawRoundedRectangle(playArea.toFloat(), 6.0f, 1.0f);
         g.drawRoundedRectangle(limArea.toFloat(), 6.0f, 1.0f);
         g.drawRoundedRectangle(themeArea.toFloat(), 6.0f, 1.0f);
     }
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced(20, 14);
-        r.removeFromTop(20);
+        auto r = getLocalBounds().reduced(20, 10);
+        r.removeFromTop(16);
 
         // ---- スケール量子化セクション ----
-        scaleArea = r.removeFromTop(156);
+        scaleArea = r.removeFromTop(142);
         {
             auto sc = scaleArea.reduced(14, 12);
 
@@ -201,14 +229,41 @@ public:
             scaleInfo.setBounds(sc);
         }
 
-        r.removeFromTop(26);
+        r.removeFromTop(16);
+
+        // ---- KEY FOLLOW / VELOCITY セクション ----
+        playArea = r.removeFromTop(116);
+        {
+            auto pa = playArea.reduced(14, 12);
+
+            auto row = pa.removeFromTop(46);
+            auto kfCol = row.removeFromLeft(180);
+            keyFollowLabel.setBounds(kfCol.removeFromTop(16));
+            keyFollowBox.setBounds(kfCol.removeFromTop(26).withTrimmedRight(10));
+
+            struct VC { ValueKnob* k; juce::Label* l; };
+            const VC vs[3] = { { &velCutKnob, &velCutLabel },
+                               { &velNoiseKnob, &velNoiseLabel },
+                               { &velDriveKnob, &velDriveLabel } };
+            for (const auto& v : vs)
+            {
+                auto c = row.removeFromLeft(112);
+                v.l->setBounds(c.removeFromTop(16));
+                v.k->setBounds(c.reduced(6, 0));
+            }
+
+            pa.removeFromTop(50);
+            playInfo.setBounds(pa);
+        }
+
+        r.removeFromTop(16);
 
         // リミッターセクション
-        limArea = r.removeFromTop(172);
+        limArea = r.removeFromTop(118);
         auto lim = limArea.reduced(14, 12);
         limOn->setBounds(lim.removeFromTop(26).removeFromLeft(150));
         lim.removeFromTop(8);
-        auto knobRow = lim.removeFromTop(110);
+        auto knobRow = lim.removeFromTop(84);
         auto c1 = knobRow.removeFromLeft(110);
         ceilLabel.setBounds(c1.removeFromTop(16));
         ceilKnob.setBounds(c1.reduced(4));
@@ -217,10 +272,10 @@ public:
         relKnob.setBounds(c2.reduced(4));
         limInfo.setBounds(knobRow.reduced(8, 30));
 
-        r.removeFromTop(26);
+        r.removeFromTop(16);
 
         // テーマセクション
-        themeArea = r.removeFromTop(104);
+        themeArea = r.removeFromTop(84);
         auto th = themeArea.reduced(14, 10);
         themeLabel.setBounds(th.removeFromTop(18));
         th.removeFromTop(4);
@@ -267,6 +322,12 @@ private:
     juce::ComboBox keyBox, scaleBox;
     juce::Label keyLabel, scaleLabel, oscApplyLabel, scaleInfo;
 
+    // ---- KEY FOLLOW / VELOCITY ----
+    juce::ComboBox keyFollowBox;
+    juce::Label keyFollowLabel, playInfo;
+    ValueKnob velCutKnob, velNoiseKnob, velDriveKnob;
+    juce::Label velCutLabel, velNoiseLabel, velDriveLabel;
+
     std::unique_ptr<GlowToggle> limOn;
     ValueKnob ceilKnob, relKnob;
     juce::Label ceilLabel, relLabel, limInfo;
@@ -274,7 +335,7 @@ private:
     juce::Label themeLabel, themeBanner, verInfo;
     juce::ComboBox themeBox;
 
-    juce::Rectangle<int> scaleArea, limArea, themeArea;
+    juce::Rectangle<int> scaleArea, playArea, limArea, themeArea;
 
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliderAtts;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> btnAtts;

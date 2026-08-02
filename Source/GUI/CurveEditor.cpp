@@ -47,6 +47,20 @@ CurveEditor::CurveEditor()
         repaint();
     };
     addAndMakeVisible(gridBox);
+
+    // ---- REPEAT: カーブを n 回繰り返して読む (テンポ同期LFO化) ----
+    for (int i = 0; i < kNumRepeatChoices; ++i)
+        repeatBox.addItem("x" + juce::String(kRepeatChoices[i]), i + 1);
+    repeatBox.setSelectedItemIndex(0, juce::dontSendNotification);
+    repeatBox.setTooltip("REPEAT: run this curve n times across the riser "
+                         "(turns any curve into a tempo-synced LFO)");
+    repeatBox.onChange = [this]
+    {
+        snap.repeat = kRepeatChoices[juce::jlimit(0, kNumRepeatChoices - 1,
+                                                  repeatBox.getSelectedItemIndex())];
+        notify();
+    };
+    addAndMakeVisible(repeatBox);
 }
 
 void CurveEditor::resized()
@@ -54,9 +68,20 @@ void CurveEditor::resized()
     auto top = getLocalBounds().removeFromTop(24).reduced(8, 3);
     gridBox.setBounds(top.removeFromRight(56));
     top.removeFromRight(4);
+    repeatBox.setBounds(top.removeFromRight(58));
+    top.removeFromRight(4);
     snapBtn.setBounds(top.removeFromRight(52));
     top.removeFromRight(4);
     presetBtn.setBounds(top.removeFromRight(66));
+}
+
+// REPEAT コンボを snap.repeat の値へ合わせる
+void CurveEditor::syncRepeatBox()
+{
+    int idx = 0;
+    for (int i = 0; i < kNumRepeatChoices; ++i)
+        if (kRepeatChoices[i] == snap.repeat) { idx = i; break; }
+    repeatBox.setSelectedItemIndex(idx, juce::dontSendNotification);
 }
 
 // ==========================================================
@@ -197,6 +222,11 @@ void CurveEditor::showPresetMenu()
 
     m.addSeparator();
     m.addItem(100, "Save Current...");
+    m.addSeparator();
+    m.addItem(101, "Copy Curve");
+    m.addItem(102, "Paste Curve", hasClipboard());
+    if (onPasteToAll != nullptr)
+        m.addItem(103, "Paste to All (this tab)", hasClipboard());
 
     const int numFactory = names.size();
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&presetBtn),
@@ -206,12 +236,32 @@ void CurveEditor::showPresetMenu()
 
             if (result >= 1 && result <= numFactory)
             {
-                setSnapshot(makeFactoryCurve(result - 1));
+                auto c = makeFactoryCurve(result - 1);
+                c.repeat = snap.repeat;      // REPEAT設定は維持して形だけ差し替える
+                setSnapshot(c);
                 notify();
             }
             else if (result == 100)
             {
                 saveCurveDialog();
+            }
+            else if (result == 101)          // Copy
+            {
+                clipboard() = snap;
+                clipboardValid() = true;
+            }
+            else if (result == 102)          // Paste
+            {
+                if (hasClipboard()) { setSnapshot(clipboard()); notify(); }
+            }
+            else if (result == 103)          // Paste to All
+            {
+                if (hasClipboard() && onPasteToAll != nullptr)
+                {
+                    setSnapshot(clipboard());
+                    notify();
+                    onPasteToAll(clipboard());
+                }
             }
             else if (result >= 200 && result - 200 < files.size())
             {
@@ -276,8 +326,15 @@ void CurveEditor::setSnapshot(const CurveSnapshot& s)
 {
     snap = s;
     if (snap.numPoints < 2)
+    {
+        const int keepRepeat = snap.repeat;
         snap = CurveSnapshot::makeDefault(0.5f, 1.0f);
+        snap.repeat = keepRepeat;
+    }
+    snap.repeat = juce::jlimit(1, 32, snap.repeat);
+    syncRepeatBox();
     dragPoint = dragSegment = -1;
+    hoverPoint = hoverSegment = -1;
     repaint();
 }
 
@@ -523,13 +580,41 @@ void CurveEditor::paint(juce::Graphics& g)
     for (int i = 0; i <= steps; ++i)
     {
         const float mx = (float)i / (float)steps;
-        const auto sp = toScreen(mx, snap.evaluate(mx));
+        // 編集対象は「1サイクル分」なので REPEAT を適用しない生の値を描く
+        const auto sp = toScreen(mx, snap.evaluateRaw(mx));
         if (i == 0) curvePath.startNewSubPath(sp);
         else        curvePath.lineTo(sp);
         fillPath.lineTo(sp);
     }
     fillPath.lineTo(a.getRight(), a.getBottom());
     fillPath.closeSubPath();
+
+    // ---- REPEAT のゴースト表示 ----
+    //  実際に鳴る「繰り返した形」を薄く重ねる。編集は1サイクル全幅のまま
+    //  行えるので操作性を損なわず、結果だけが確認できる。
+    if (snap.repeat > 1)
+    {
+        // サイクル境界の縦線
+        g.setColour(accent.withAlpha(0.16f));
+        for (int k = 1; k < snap.repeat; ++k)
+        {
+            const float gx = a.getX() + a.getWidth() * (float)k / (float)snap.repeat;
+            g.drawVerticalLine((int)gx, a.getY(), a.getBottom());
+        }
+
+        // 繰り返した波形 (repeat が多いほど密になるのでステップ数を増やす)
+        juce::Path ghost;
+        const int gsteps = juce::jmax(steps, juce::jmin(2048, steps * snap.repeat / 2));
+        for (int i = 0; i <= gsteps; ++i)
+        {
+            const float mx = (float)i / (float)gsteps;
+            const auto sp = toScreen(mx, snap.evaluate(mx));   // REPEAT 適用済み
+            if (i == 0) ghost.startNewSubPath(sp);
+            else        ghost.lineTo(sp);
+        }
+        g.setColour(accent.withAlpha(0.42f));
+        g.strokePath(ghost, juce::PathStrokeType(1.2f));
+    }
 
     // 塗り: 上ほど濃い縦グラデーション (「エネルギーが立ち上がる」印象を出す)
     {
@@ -601,6 +686,7 @@ void CurveEditor::paint(juce::Graphics& g)
         g.setColour(LiftColors::accentMaster.withAlpha(0.6f));
         g.drawLine(px, a.getY(), px, a.getBottom(), 1.6f);
 
+        // ドットは実際に鳴っている値 (REPEAT適用後) を指す
         const auto dot = toScreen(prog, snap.evaluate(prog));
         g.setColour(LiftColors::accentMaster.withAlpha(0.28f));
         g.fillEllipse(dot.x - 8.0f, dot.y - 8.0f, 16.0f, 16.0f);
@@ -630,7 +716,7 @@ void CurveEditor::paint(juce::Graphics& g)
 void CurveEditor::drawValueBadge(juce::Graphics& g, juce::Point<float> at, const juce::String& text)
 {
     const auto a = plotArea();
-    g.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
+    g.setFont(LiftFonts::mono(10.5f, true));
     const float w = 78.0f, h = 18.0f;
 
     float bx = juce::jlimit(a.getX(), a.getRight() - w, at.x - w * 0.5f);

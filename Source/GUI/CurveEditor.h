@@ -37,6 +37,17 @@ public:
     // 変更通知 (CurveStore::publish へ接続する)
     std::function<void(const CurveSnapshot&)> onChanged;
 
+    // 「Paste to All」でタブ内の全ターゲットへ貼るためのフック。
+    //  設定されている場合のみメニューに項目が出る。
+    std::function<void(const CurveSnapshot&)> onPasteToAll;
+
+    // ---- カーブのクリップボード (全エディタで共有) ----
+    //  35本のカーブを1本ずつ描くのは大変なので、OSC1で作った形を
+    //  OSC2/3 や他のターゲットへそのまま流用できるようにする。
+    static CurveSnapshot& clipboard()      { static CurveSnapshot c; return c; }
+    static bool& clipboardValid()          { static bool v = false; return v; }
+    static bool hasClipboard()             { return clipboardValid(); }
+
     // 見た目
     void setAccent(juce::Colour c) { accent = c; repaint(); }
     void setBipolar(bool b) { bipolar = b; repaint(); }
@@ -76,6 +87,15 @@ private:
     juce::ComboBox gridBox;
     bool snapOn = false;
     int gridDiv = 16;
+
+    // ---- REPEAT (カーブのLFO化) ----
+    //  編集は常に1サイクルを全幅で行い、繰り返した結果はゴーストで重ね描きする。
+    //  (1/32 幅で編集させるのは非現実的なため)
+    static constexpr int kNumRepeatChoices = 10;
+    static constexpr int kRepeatChoices[kNumRepeatChoices] =
+        { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32 };
+    juce::ComboBox repeatBox;
+    void syncRepeatBox();
 
     juce::Rectangle<float> plotArea() const;
     juce::Point<float> toScreen(float x, float y) const;

@@ -85,7 +85,7 @@ public:
         g.fillEllipse(dotX - 2.5f, cy - 2.5f, 5.0f, 5.0f);
 
         // ---- ラベル: 左に "PITCH" / 中央に現在音名 ----
-        g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+        g.setFont(LiftFonts::mono(10.0f, true));
         g.setColour(LiftColors::textDim);
         g.drawText("PITCH", getLocalBounds().withTrimmedLeft(5), juce::Justification::centredLeft, false);
 

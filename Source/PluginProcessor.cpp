@@ -258,6 +258,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
         add(std::make_unique<IntP>(juce::ParameterID{"osc" + n + "Coarse", 1}, "Osc" + n + " Coarse",
             -24, 24, 0, juce::AudioParameterIntAttributes().withStringFromValueFunction(
                 [](int v, int) { return juce::String(v) + "st"; })));
+        // FINE: ±100セント。レイヤー間のわずかなズレで厚みを出す
+        add(std::make_unique<FloatP>(juce::ParameterID{"osc" + n + "Fine", 1}, "Osc" + n + " Fine",
+            juce::NormalisableRange<float>(-100.0f, 100.0f), 0.0f, attr(ctStr)));
         add(std::make_unique<IntP>(juce::ParameterID{"osc" + n + "Uni", 1}, "Osc" + n + " Unison",
             1, RiserEngine::kMaxUnison, 1));
         add(std::make_unique<FloatP>(juce::ParameterID{"osc" + n + "Det", 1}, "Osc" + n + " Detune",
@@ -382,6 +385,28 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
                     juce::String(fxLabel[f]) + " " + srcNames[s], true));
     }
 
+    // ---- KEY FOLLOW (v0.5) ----
+    //  MIDIノートは本来トリガー専用で、ピッチは Start/End キーだけで決まる。
+    //  Follow を有効にすると、弾いたノートに合わせて音域ごと平行移動する。
+    //   Fixed       : 従来どおりノートを無視
+    //   Follow Start: 弾いた音が開始音になる (End も同じ量だけ動く)
+    //   Follow End  : 弾いた音が着地音になる (ライザーが着地する音を鍵盤で指定)
+    //  ※ Start/End パラメーター自体は書き換えない (オートメーションと衝突させない)
+    //  基準は常に OSC1 の Start/End キー。つまり「OSC1のSTARTと同じ音を弾けば
+    //  移調ゼロ」になるため、別途の基準ノート設定は不要。
+    add(std::make_unique<ChoiceP>(juce::ParameterID{"keyFollow", 1}, "Key Follow",
+        juce::StringArray{ "Fixed", "Follow Start", "Follow End" }, 0));
+
+    // ---- VELOCITY モジュレーション (v0.5) ----
+    //  ベロシティは従来レベルにしか効いていなかった。弾き方で表情を変えられるよう
+    //  代表的な3先へのルーティング量を用意する (0 = 従来と完全に同じ)。
+    add(std::make_unique<FloatP>(juce::ParameterID{"velToCutoff", 1}, "Vel > Cutoff",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, attr(pctStr)));
+    add(std::make_unique<FloatP>(juce::ParameterID{"velToNoise", 1}, "Vel > Noise Lv",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, attr(pctStr)));
+    add(std::make_unique<FloatP>(juce::ParameterID{"velToDrive", 1}, "Vel > Sat Drive",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, attr(pctStr)));
+
     return { params.begin(), params.end() };
 }
 
@@ -405,7 +430,8 @@ void LiftXAudioProcessor::cacheParameterPointers()
         const juce::String n(i + 1);
         pOsc[(size_t)i] = { p("osc" + n + "On"), p("osc" + n + "Solo"), p("osc" + n + "Mute"),
                             p("osc" + n + "Wave"), p("osc" + n + "Pos"), p("osc" + n + "Level"),
-                            p("osc" + n + "Coarse"), p("osc" + n + "Uni"), p("osc" + n + "Det"),
+                            p("osc" + n + "Coarse"), p("osc" + n + "Fine"),
+                            p("osc" + n + "Uni"), p("osc" + n + "Det"),
                             p("osc" + n + "Spread"), p("osc" + n + "KeyStart"), p("osc" + n + "KeyEnd"),
                             p("osc" + n + "Scale") };
     }
@@ -450,6 +476,11 @@ void LiftXAudioProcessor::cacheParameterPointers()
     pRevDamp = p("revDamp"); pRevMod = p("revMod");
     pDuckAmt = p("duckAmt"); pDuckRate = p("duckRate"); pDuckShape = p("duckShape");
     pLimOn = p("limOn"); pLimCeiling = p("limCeiling"); pLimRelease = p("limRelease");
+
+    pKeyFollow   = p("keyFollow");
+    pVelToCutoff = p("velToCutoff");
+    pVelToNoise  = p("velToNoise");
+    pVelToDrive  = p("velToDrive");
 }
 
 float LiftXAudioProcessor::getEnvPosition() const noexcept
@@ -883,6 +914,9 @@ void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noex
     ep.scaleOn = pScaleOn->load() > 0.5f;
     ep.scaleKey = (int)pScaleKey->load();
     ep.scaleType = (int)pScaleType->load();
+    ep.keyFollowMode = pKeyFollow != nullptr ? (int)pKeyFollow->load() : 0;
+    ep.velToCutoff = pVelToCutoff != nullptr ? pVelToCutoff->load() : 0.0f;
+    ep.velToNoise  = pVelToNoise  != nullptr ? pVelToNoise->load()  : 0.0f;
 
     for (int i = 0; i < RiserEngine::kNumOscs; ++i)
     {
@@ -895,6 +929,7 @@ void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noex
         o.pos = q.pos->load();
         o.level = q.level->load();
         o.coarse = q.coarse->load();
+        o.fine = q.fine != nullptr ? q.fine->load() : 0.0f;
         o.unison = (int)q.uni->load();
         o.detune = q.det->load();
         o.spread = q.spread->load();
@@ -955,7 +990,14 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
     // フルレンジ加算: 中央=ノブ値 / 上端=MAX方向 / 下端=MIN方向 (クランプ付き)
     fp.satAmt = c01(pSatAmt->load() + bip(CurveStore::SatAmt) * 1.0f);
     fp.satAlgo = (int)pSatAlgo->load();
-    fp.satDrive = juce::jlimit(1.0f, 12.0f, pSatDrive->load() + bip(CurveStore::SatDrive) * 11.0f);
+    {
+        // VELOCITY -> SAT DRIVE: 弱く弾くほど歪みが浅くなる
+        const float vd = pVelToDrive != nullptr ? pVelToDrive->load() : 0.0f;
+        const float velMul = (vd > 0.0f)
+            ? 1.0f - vd * (1.0f - mEngine.getVelocityNorm()) : 1.0f;
+        fp.satDrive = juce::jlimit(1.0f, 12.0f,
+            1.0f + (pSatDrive->load() + bip(CurveStore::SatDrive) * 11.0f - 1.0f) * velMul);
+    }
     fp.satPreHz = pSatPre->load();
     fp.satTrimDb = pSatTrim->load();
 

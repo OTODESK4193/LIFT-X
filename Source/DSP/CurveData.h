@@ -42,6 +42,16 @@ struct CurveSnapshot
     };
 
     int numPoints = 0;
+
+    // ---- REPEAT (カーブのLFO化) ----
+    //  評価位置 x を repeat 回ぶん折り返して読む。1 なら従来どおり1回だけ通る。
+    //  これだけで同じカーブが「テンポ同期LFO」として機能する:
+    //   ・Level カーブ  x16 → 16分のゲート/トレモロ
+    //   ・Pitch カーブ  x8  → ワブル
+    //   ・Filter カーブ x32 → 細かい刻み
+    //  Bars と連動するため、常に小節に対して正確な分割になる。
+    int repeat = 1;   // 1..32
+
     std::array<Point, kMaxPoints> pts {};
 
     // セグメント形状: テンション c(-1..1) を指数 2^(3c) にマップ (0.125..8)
@@ -60,6 +70,22 @@ struct CurveSnapshot
     //   Steps32 等の 65点カーブでは線形走査が平均32回まで伸びるため効果が大きい。
     //   nullptr を渡せば従来どおり先頭から走査する (GUI描画はこちら)。
     float evaluate(float x, int* hint = nullptr) const noexcept
+    {
+        return evaluateRaw(wrapRepeat(x), hint);
+    }
+
+    // REPEAT を適用した評価位置を返す。
+    //  終端 (x>=1) だけはカーブの終わりを返す (折り返して先頭に戻さない)。
+    float wrapRepeat(float x) const noexcept
+    {
+        x = juce::jlimit(0.0f, 1.0f, x);
+        if (repeat <= 1 || x >= 1.0f) return x;
+        const float xr = x * (float)repeat;
+        return xr - std::floor(xr);
+    }
+
+    // REPEAT を適用しない素の評価 (カーブエディタの編集表示用)
+    float evaluateRaw(float x, int* hint = nullptr) const noexcept
     {
         if (numPoints <= 0) return 0.5f;
         if (numPoints == 1) return pts[0].y;
@@ -105,10 +131,15 @@ struct CurveSnapshot
         return s;
     }
 
-    // --- シリアライズ ("x,y,c;x,y,c;...") ---
+    // --- シリアライズ ---
+    //  基本形は "x,y,c;x,y,c;..."。
+    //  REPEAT が 2以上のときだけ先頭に "R<n>|" を付ける。
+    //  → 旧プリセット/旧セッションは R が無いので repeat=1 として読まれ、
+    //    完全に後方互換が保たれる。
     juce::String toString() const
     {
         juce::String s;
+        if (repeat > 1) s << "R" << repeat << "|";
         for (int i = 0; i < numPoints; ++i)
         {
             if (i > 0) s << ";";
@@ -122,7 +153,19 @@ struct CurveSnapshot
     static CurveSnapshot fromString(const juce::String& str)
     {
         CurveSnapshot s;
-        auto segs = juce::StringArray::fromTokens(str, ";", "");
+
+        juce::String body = str;
+        if (body.startsWithChar('R'))
+        {
+            const int bar = body.indexOfChar('|');
+            if (bar > 1)
+            {
+                s.repeat = juce::jlimit(1, 32, body.substring(1, bar).getIntValue());
+                body = body.substring(bar + 1);
+            }
+        }
+
+        auto segs = juce::StringArray::fromTokens(body, ";", "");
         for (const auto& seg : segs)
         {
             if (s.numPoints >= kMaxPoints) break;
@@ -135,7 +178,11 @@ struct CurveSnapshot
             s.pts[(size_t)s.numPoints++] = p;
         }
         if (s.numPoints < 2)
+        {
+            const int keepRepeat = s.repeat;
             s = makeDefault(0.5f, 0.5f);
+            s.repeat = keepRepeat;
+        }
         // 端点を強制 (x=0 / x=1)
         s.pts[0].x = 0.0f;
         s.pts[(size_t)s.numPoints - 1].x = 1.0f;

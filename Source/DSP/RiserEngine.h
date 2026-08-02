@@ -56,6 +56,17 @@ public:
         int  scaleKey = 0;       // 0..11 (C..B)
         int  scaleType = 1;      // ScaleQuantizer::getScales() のインデックス
 
+        // ---- KEY FOLLOW ----
+        //  0=Fixed (ノート無視) / 1=Follow Start / 2=Follow End
+        //  基準は OSC1 の Start/End キー。Start/End パラメーター自体は
+        //  書き換えず、エンジン内部のオフセットとして処理する
+        //  (ホストのオートメーションと衝突させないため)。
+        int keyFollowMode = 0;
+
+        // ---- VELOCITY モジュレーション (0 = 無効 / 従来と同一) ----
+        float velToCutoff = 0.0f;
+        float velToNoise  = 0.0f;
+
         struct Osc
         {
             bool  on = false;
@@ -65,6 +76,7 @@ public:
             float pos = 0.0f;        // WTポジション (CustomWT時のみ有効)
             float level = 0.8f;
             float coarse = 0.0f;     // 半音 (Start/EndKeyへのオフセット)
+            float fine = 0.0f;       // セント (±100) — レイヤーの微妙なズレ用
             int   unison = 1;
             float detune = 12.0f;    // cents
             float spread = 0.7f;
@@ -172,6 +184,7 @@ public:
     {
         noteHeld = false;
         curNote = -1;
+        velNorm = 1.0f;
         ampEnv = 0.0f;
         progress = 0.0;
         progInc = 0.0;
@@ -264,7 +277,8 @@ private:
         hostSync = hostPlaying;
         startPpq = ppqNow;
         progress = 0.0;
-        velGain = 0.25f + 0.75f * juce::jlimit(0.0f, 1.0f, velocity);
+        velNorm = juce::jlimit(0.0f, 1.0f, velocity);
+        velGain = 0.25f + 0.75f * velNorm;
         ctrlCount = 0;      // 次サンプルで即コントロールティック
         snapNext = true;    // 平滑をターゲットへスナップ (古い値からのグライド防止)
 
@@ -309,6 +323,9 @@ public:
     //  組み立てていたため、MANUALで素早く動かすとオシレーターは滑らかに
     //  追従するのにFXだけブロック単位で跳ぶ、という不一致が起きていた。
     float getEvalPos() const noexcept { return liftSm; }
+
+    // 直近ノートの正規化ベロシティ (FX側の VELOCITY モジュレーション用)
+    float getVelocityNorm() const noexcept { return velNorm; }
 
     std::atomic<float> uiProgress { 0.0f };
 
@@ -488,6 +505,24 @@ public:
     }
 
 private:
+    // ---- KEY FOLLOW のピッチオフセット (半音) ----
+    //  Fixed        : 0 (ノートを完全に無視 = 従来動作)
+    //  Follow Start : 弾いた音が「開始音」になる → offset = played - OSC1.keyStart
+    //  Follow End   : 弾いた音が「着地音」になる → offset = played - OSC1.keyEnd
+    //
+    //  基準を常に OSC1 に取るのが要点。OSC毎に自分の keyStart を基準にすると、
+    //  OSC間で意図的に付けた音域差 (レイヤーの厚み) が潰れてしまう。
+    //  OSC1 基準なら全OSCが同じ量だけ動くので、和声関係がそのまま保たれる。
+    float keyFollowOffset(const Params& p) const noexcept
+    {
+        if (p.keyFollowMode <= 0 || curNote < 0) return 0.0f;
+
+        const auto& ref = p.osc[0];
+        const float refPitch = (p.keyFollowMode == 1) ? (float)ref.keyStart
+                                                      : (float)ref.keyEnd;
+        return (float)curNote - refPitch;
+    }
+
     // ---- コントロールティック: 全カーブ評価とターゲット更新 ----
     void controlTick(const Params& p, const CurveStore& curves) noexcept
     {
@@ -524,10 +559,16 @@ private:
             float basePitch = (float)po.keyStart
                             + ((float)po.keyEnd - (float)po.keyStart) * ky;
 
+            // ---- KEY FOLLOW: 弾いたノートに合わせて音域ごと平行移動 ----
+            //  量子化の「前」に足すことで、移調してもスケール構成音に乗り続ける。
+            basePitch += keyFollowOffset(p);
+
             const bool quant = p.scaleOn && po.scaleQ;
             if (quant)
                 basePitch = ScaleQuantizer::quantize(basePitch, p.scaleKey, p.scaleType);
-            pitchTarget[(size_t)o] = basePitch + po.coarse;
+
+            // COARSE / FINE は量子化の「後」に足す (オクターブ・度数関係を厳密に保つ)
+            pitchTarget[(size_t)o] = basePitch + po.coarse + po.fine * 0.01f;
             pitchQuant[(size_t)o] = quant;
 
             // GUI (PITCH RAIL) へライブピッチを公開
@@ -591,8 +632,11 @@ private:
                 p.noisePitch * std::exp2(bip(CurveStore::NoisePitch) * p.noiseRangeOct));
             noiseCutSm += cutTickCoef * (target - noiseCutSm);
 
+            // VELOCITY → NOISE LEVEL: 弱く弾くほどノイズ層が引っ込む
+            const float velNoise = (p.velToNoise > 0.0f)
+                                 ? 1.0f - p.velToNoise * (1.0f - velNorm) : 1.0f;
             levelTarget[3] = juce::jlimit(0.0f, 1.0f,
-                p.noiseLevel + bip(CurveStore::NoiseLevel) * 1.0f);
+                (p.noiseLevel + bip(CurveStore::NoiseLevel) * 1.0f) * velNoise);
 
             const float resTgt = juce::jlimit(0.5f, 12.0f,
                 p.noiseRes + bip(CurveStore::NoiseRes) * 11.5f);
@@ -610,7 +654,12 @@ private:
             if (!p.flt[(size_t)j].on) continue;
             const float modAmount = juce::jlimit(-1.0f, 1.0f, p.flt[(size_t)j].env * bip(CurveStore::Filter1 + j));
             const float maxCutHz = (float)(sr * 0.45);
-            const float baseCutHz = juce::jlimit(20.0f, maxCutHz, p.flt[(size_t)j].cutoff);
+
+            // VELOCITY → CUTOFF: 弱く弾くほど暗くなる (最大2オクターブ下げ)
+            const float velCut = (p.velToCutoff > 0.0f)
+                               ? std::exp2(-2.0f * p.velToCutoff * (1.0f - velNorm)) : 1.0f;
+            const float baseCutHz = juce::jlimit(20.0f, maxCutHz,
+                                                 p.flt[(size_t)j].cutoff * velCut);
             const float logCut = std::log2(baseCutHz);
             const float logTarget = modAmount >= 0.0f ? logCut + modAmount * (std::log2(maxCutHz) - logCut)
                                                        : logCut + modAmount * (logCut - std::log2(20.0f));
@@ -707,6 +756,7 @@ private:
     bool snapNext = true;
     int curNote = -1;
     float velGain = 1.0f;
+    float velNorm = 1.0f;   // 0..1 の生ベロシティ (VELOCITYモジュレーション用)
     double startPpq = 0.0;
     double totalQn = 16.0;
     double progress = 0.0;

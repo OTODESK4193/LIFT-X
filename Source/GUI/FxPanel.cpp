@@ -100,7 +100,7 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     // TIME / RATE のカーブ変調による実効値表示
     for (auto* l : { &dlyTimeLive, &duckRateLive })
     {
-        l->setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+        l->setFont(LiftFonts::mono(11.0f, true));
         l->setColour(juce::Label::textColourId, LiftColors::accentMaster);
         l->setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(*l);

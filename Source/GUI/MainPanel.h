@@ -64,7 +64,7 @@ private:
             }
 
             g.setColour(LiftColors::text);
-            g.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+            g.setFont(LiftFonts::mono(12.0f, true));
             g.drawText("PROGRESS " + juce::String((int)std::round(v * 100.0f)) + "%",
                        getLocalBounds(), juce::Justification::centred);
         }
@@ -115,8 +115,10 @@ private:
     std::array<juce::ComboBox, 3> waveBox;
     std::array<WaveDisplay, 3> waveDisp;
     std::array<juce::TextButton, 3> browseBtn, rndBtn;
-    std::array<KnobCell, 3> oscPos, oscLevel, oscCoarse, oscUni, oscDet, oscSpread;
+    std::array<KnobCell, 3> oscPos, oscLevel, oscCoarse, oscFine, oscUni, oscDet, oscSpread;
     std::array<juce::TextButton, 3> keyStartBtn, keyEndBtn;
+    // START <-> END を入れ替える (REVERSE と違いピッチだけが逆になる)
+    std::array<juce::TextButton, 3> keySwapBtn;
     // Pitch ENV ライブ表示 (ノブが無いParameterのためModBandではなく専用バー)
     std::array<std::unique_ptr<PitchRail>, 3> pitchRail;
 

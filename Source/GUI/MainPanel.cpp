@@ -72,6 +72,7 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         setupKnob(oscPos[(size_t)i], "POS", "osc" + n + "Pos", LiftColors::IdMint);
         setupKnob(oscLevel[(size_t)i], "LEVEL", "osc" + n + "Level", LiftColors::IdMint);
         setupKnob(oscCoarse[(size_t)i], "COARSE", "osc" + n + "Coarse", LiftColors::IdMint);
+        setupKnob(oscFine[(size_t)i], "FINE", "osc" + n + "Fine", LiftColors::IdMint);
         setupKnob(oscUni[(size_t)i], "UNISON", "osc" + n + "Uni", LiftColors::IdMint);
         setupKnob(oscDet[(size_t)i], "DETUNE", "osc" + n + "Det", LiftColors::IdMint);
         setupKnob(oscSpread[(size_t)i], "SPREAD", "osc" + n + "Spread", LiftColors::IdMint);
@@ -81,6 +82,24 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
 
         addAndMakeVisible(keyStartBtn[(size_t)i]);
         addAndMakeVisible(keyEndBtn[(size_t)i]);
+
+        // SWAP: START と END を入れ替える。
+        //  REVERSE はカーブ全体 (フィルター/FX含む) が逆再生になるのに対し、
+        //  こちらはピッチの向きだけを反転させたい場合に使う。
+        keySwapBtn[(size_t)i].setButtonText("SWAP");
+        keySwapBtn[(size_t)i].setTooltip("Swap START and END keys (pitch direction only)");
+        addAndMakeVisible(keySwapBtn[(size_t)i]);
+        keySwapBtn[(size_t)i].onClick = [this, i]
+        {
+            const juce::String nn(i + 1);
+            auto* ps = proc.apvts.getParameter("osc" + nn + "KeyStart");
+            auto* pe = proc.apvts.getParameter("osc" + nn + "KeyEnd");
+            if (ps == nullptr || pe == nullptr) return;
+            const float a = ps->getValue(), b = pe->getValue();
+            ps->setValueNotifyingHost(b);
+            pe->setValueNotifyingHost(a);
+            refreshKeyButtons();
+        };
         keyStartBtn[(size_t)i].onClick = [this, i]
         { armLearn("osc" + juce::String(i + 1) + "KeyStart", keyStartBtn[(size_t)i]); };
         keyEndBtn[(size_t)i].onClick = [this, i]
@@ -329,6 +348,8 @@ void MainPanel::layoutKnobGrid(juce::Rectangle<int> area, KnobCell** cells, int 
 
     for (int i = 0; i < count; ++i)
     {
+        if (cells[i] == nullptr) continue;   // 空きセル (奇数個のグリッド用)
+
         const int cx = area.getX() + (i % cols) * cw;
         const int cy = area.getY() + (i / cols) * ch;
         juce::Rectangle<int> cell(cx, cy, cw, ch);
@@ -421,6 +442,8 @@ void MainPanel::resized()
 
         // キー設定 (最下段) + その上に Pitch ENV ライブバー
         auto keyRow = col.removeFromBottom(24);
+        keySwapBtn[(size_t)i].setBounds(keyRow.removeFromRight(46));
+        keyRow.removeFromRight(4);
         keyStartBtn[(size_t)i].setBounds(keyRow.removeFromLeft(keyRow.getWidth() / 2 - 2));
         keyRow.removeFromLeft(4);
         keyEndBtn[(size_t)i].setBounds(keyRow);
@@ -430,10 +453,11 @@ void MainPanel::resized()
         col.removeFromBottom(4);
 
         col.removeFromTop(4);
-        KnobCell* cells[6] = { &oscPos[(size_t)i], &oscLevel[(size_t)i],
-                               &oscCoarse[(size_t)i], &oscUni[(size_t)i],
-                               &oscDet[(size_t)i], &oscSpread[(size_t)i] };
-        layoutKnobGrid(col, cells, 6, 2);
+        KnobCell* cells[8] = { &oscPos[(size_t)i],    &oscLevel[(size_t)i],
+                               &oscCoarse[(size_t)i], &oscFine[(size_t)i],
+                               &oscUni[(size_t)i],    &oscDet[(size_t)i],
+                               &oscSpread[(size_t)i], nullptr };
+        layoutKnobGrid(col, cells, 7, 2);
     }
 
     // ノイズ列 + マスターエリア

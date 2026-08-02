@@ -368,3 +368,6 @@ FodyWeavers.xsd
 
 # レビュー用の一時成果物は残すが、バックアップは除外
 *.bak
+
+# フォント配布アーカイブ (実際に使う4ウェイトは Source/Assets/Fonts/ に抽出済み)
+Source/Assets/Inter,JetBrains_Mono/
