@@ -101,6 +101,10 @@ private:
     // BARSコンボの下: ENV反転 / ランダマイズ
     std::unique_ptr<GlowToggle> reverseButton;
     juce::TextButton randomButton;
+    // MUTATE: 現在の音を起点に近傍だけを揺らす (RANDOMのように作り直さない)
+    juce::TextButton mutateButton;
+    // ロック: RANDOM の対象からOSC/カーブを外す
+    std::unique_ptr<GlowToggle> lockOscBtn, lockCurveBtn;
     ProgressStrip progressStrip;
     RiserWaveStrip waveStrip;
 

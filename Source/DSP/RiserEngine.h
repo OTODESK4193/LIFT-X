@@ -63,6 +63,11 @@ public:
         //  (ホストのオートメーションと衝突させないため)。
         int keyFollowMode = 0;
 
+        // ---- HUMANIZE (0 = 無効 / 従来と完全に同一) ----
+        //  ENV評価位置へゆっくりしたランダムな揺れを足す。
+        //  機械的に正確なライザーに「息づかい」を与える。
+        float humanize = 0.0f;
+
         // ---- VELOCITY モジュレーション (0 = 無効 / 従来と同一) ----
         float velToCutoff = 0.0f;
         float velToNoise  = 0.0f;
@@ -185,6 +190,10 @@ public:
             juce::jmin(1.0f, noiseStep) + (1.0f - juce::jmin(1.0f, noiseStep)) * (2.0f / 3.0f));
         noiseInterpGain = 1.0f / std::sqrt(varFactor);
 
+        // ドリフトLFO: 0.31Hz と 0.31*1.618Hz (黄金比でループ感を消す)
+        driftInc1 = (float)(0.31 / tickRate);
+        driftInc2 = (float)(0.31 * 1.618 / tickRate);
+
         hardReset();
     }
 
@@ -204,6 +213,7 @@ public:
         pendingNote = false;
         pendNote = -1;
         liftSm = 1.0f;
+        driftPhase1 = 0.0f; driftPhase2 = 0.37f; driftSm = 0.0f;
         for (auto& po : phase) po.fill(0.0f);
         pitchSm.fill(60.0f);
         levelSm.fill(0.0f);
@@ -572,7 +582,25 @@ private:
         else
             liftSm += (p.liftAuto ? liftTickCoefAuto : liftTickCoefManual)
                     * (posTarget - liftSm);
-        const float evalPos = liftSm;
+
+        // ---- HUMANIZE: 評価位置をゆっくり揺らす ----
+        //  2つの無理数比LFOを重ねた擬似ランダム。周期が噛み合わないため
+        //  同じ揺れが繰り返されず、有機的に聞こえる。最大 ±3%。
+        if (p.humanize > 0.0f)
+        {
+            driftPhase1 += driftInc1; if (driftPhase1 >= 1.0f) driftPhase1 -= 1.0f;
+            driftPhase2 += driftInc2; if (driftPhase2 >= 1.0f) driftPhase2 -= 1.0f;
+            const float d = (std::sin(driftPhase1 * juce::MathConstants<float>::twoPi)
+                           + std::sin(driftPhase2 * juce::MathConstants<float>::twoPi)) * 0.5f;
+            driftSm += 0.05f * (d - driftSm);   // 角を丸める
+        }
+        else
+        {
+            driftSm *= 0.98f;                   // OFFにしたら滑らかに戻す
+        }
+
+        const float evalPos = juce::jlimit(0.0f, 1.0f,
+                                           liftSm + driftSm * p.humanize * 0.03f);
 
         // バイポーラ偏差 (-1..1)。curveHint でセグメント探索を実質O(1)にする。
         auto bip = [this, &curves, evalPos](int idx) noexcept
@@ -859,6 +887,10 @@ private:
     float smCoef = 0.01f;
     float smCoefFast = 0.03f;
     float liftSm = 1.0f;
+    // HUMANIZE 用のゆっくりしたドリフト (無理数比の2LFO)
+    float driftPhase1 = 0.0f, driftPhase2 = 0.37f;
+    float driftInc1 = 0.0f, driftInc2 = 0.0f;
+    float driftSm = 0.0f;
 
     // ---- 2段階デクリック (リトリガー時のクリック対策) ----
     enum class Declick { Idle, FadeOut, FadeIn };

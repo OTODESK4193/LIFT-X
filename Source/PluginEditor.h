@@ -71,8 +71,11 @@ private:
     {
         std::function<void(juce::Graphics&)> onPaint;
         std::function<void()> onLayout;
+        // 子パネル (MainPanel) からカーブ変更を伝えるための経路
+        std::function<void(int)> onCommand;
         void paint(juce::Graphics& g) override { if (onPaint) onPaint(g); }
         void resized() override { if (onLayout) onLayout(); }
+        void handleCommandMessage(int id) override { if (onCommand) onCommand(id); }
     };
 
     ContentComponent content;

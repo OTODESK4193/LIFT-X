@@ -153,7 +153,13 @@ public:
     // ---- RANDOM (メッセージスレッド専用) ----
     //  MAINタブ + OSC ENVタブのパラメーターとカーブを「音楽的に破綻しない範囲」で
     //  ランダマイズする。MASTERエリア / FX / CONFIG / FILTER は一切変更しない。
-    void randomizeMainAndOsc();
+    //  lockOsc   : OSCのパラメーター(波形/レベル/ユニゾン/キー等)を据え置く
+    //  lockCurves: カーブ(ENVの形)を据え置く
+    void randomizeMainAndOsc(bool lockOsc = false, bool lockCurves = false);
+
+    //  MUTATE: 完全なランダムではなく、現在の設定を少しだけ揺らす。
+    //   気に入った音を壊さずに近傍を探索できる (amount 0.05〜0.5 程度)。
+    void mutateMainAndOsc(float amount);
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -301,7 +307,8 @@ private:
     std::array<std::atomic<float>*, FxChain::kNumSlots> pFxType {};
 
     // FXのソース別ルーティング [効果 0:Sat 1:Cho 2:Dly 3:Rev 4:Duck][ソース 0-3]
-    std::array<std::array<std::atomic<float>*, RiserEngine::kNumSources>, 5> pFxRoute {};
+    std::array<std::array<std::atomic<float>*, RiserEngine::kNumSources>,
+               FxChain::kNumFxKinds> pFxRoute {};
 
     std::atomic<float> *pSatAmt = nullptr, *pSatAlgo = nullptr, *pSatDrive = nullptr,
                        *pSatPre = nullptr, *pSatTrim = nullptr;
@@ -314,6 +321,8 @@ private:
     std::atomic<float> *pLimOn = nullptr, *pLimCeiling = nullptr, *pLimRelease = nullptr;
 
     // v0.5 追加: Key Follow / Velocity モジュレーション
+    std::atomic<float> *pStutAmt = nullptr, *pStutRate = nullptr;
+    std::atomic<float> *pHumanize = nullptr;
     std::atomic<float> *pKeyFollow = nullptr;
     std::atomic<float> *pVelToCutoff = nullptr, *pVelToNoise = nullptr, *pVelToDrive = nullptr;
 

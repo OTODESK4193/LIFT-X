@@ -55,6 +55,9 @@ LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
     // PRESETタブのCloseボタン → MAINタブへ戻る
     presetPanel.onClose = [this] { setActiveTab(Tab::Main); };
 
+    // MainPanel の RANDOM / MUTATE でカーブが入れ替わったら他タブも読み直す
+    content.onCommand = [this](int) { refreshAfterPresetChange(); };
+
     setActiveTab(Tab::Main);
 
     // ---- リサイズ (アスペクト比固定) ----

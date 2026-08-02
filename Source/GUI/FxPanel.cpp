@@ -3,9 +3,9 @@
 // ==========================================
 #include "FxPanel.h"
 
-const std::array<FxPanel::FxDef, 5>& FxPanel::defs()
+const std::array<FxPanel::FxDef, 6>& FxPanel::defs()
 {
-    static const std::array<FxDef, 5> d = { {
+    static const std::array<FxDef, 6> d = { {
         { "SAT",    2, { CurveStore::SatAmt,  CurveStore::SatDrive, 0 },
                        { "AMT", "DRIVE", "" } },
         { "CHORUS", 2, { CurveStore::ChoAmt,  CurveStore::ChoDepth, 0 },
@@ -16,6 +16,8 @@ const std::array<FxPanel::FxDef, 5>& FxPanel::defs()
                        { "AMT", "SHIMMER", "" } },
         { "DUCK",   3, { CurveStore::DuckAmt, CurveStore::DuckRate, CurveStore::DuckShape },
                        { "AMT", "RATE", "SHAPE" } },
+        { "STUTTER",2, { CurveStore::StutAmt, CurveStore::StutRate, 0 },
+                       { "AMT", "RATE", "" } },
     } };
     return d;
 }
@@ -38,7 +40,7 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     }
 
     // ---- FXサブタブ / カーブサブタブ ----
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 6; ++i)
     {
         fxTabs[(size_t)i] = std::make_unique<juce::TextButton>(defs()[(size_t)i].name);
         fxTabs[(size_t)i]->onClick = [this, i] { setFx(i); };
@@ -97,8 +99,11 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     mkCombo(duckRateBox, duckRateLabel, "RATE", "duckRate", FxChain::getDuckRateNames());
     mkKnob(duckShape, "SHAPE", "duckShape", LiftColors::IdPeach);
 
+    mkKnob(stutAmt, "AMT", "stutAmt", LiftColors::IdSage);
+    mkCombo(stutRateBox, stutRateLabel, "RATE", "stutRate", FxChain::getStutterRateNames());
+
     // TIME / RATE のカーブ変調による実効値表示
-    for (auto* l : { &dlyTimeLive, &duckRateLive })
+    for (auto* l : { &dlyTimeLive, &duckRateLive, &stutRateLive })
     {
         l->setFont(LiftFonts::mono(11.0f, true));
         l->setColour(juce::Label::textColourId, LiftColors::accentMaster);
@@ -163,10 +168,14 @@ void FxPanel::timerCallback()
         upd(revAmt, "revAmt", CurveStore::RevAmt, 1.0f);
         upd(revShimmer, "revShimmer", CurveStore::RevShimmer, 1.0f);
         break;
-    default:
+    case 4:
         upd(duckAmt, "duckAmt", CurveStore::DuckAmt, 1.0f);
         upd(duckShape, "duckShape", CurveStore::DuckShape, 7.5f);
         updateDuckRateLive(envPos);
+        break;
+    default:
+        upd(stutAmt, "stutAmt", CurveStore::StutAmt, 1.0f);
+        updateStutterRateLive(envPos);
         break;
     }
 }
@@ -192,6 +201,28 @@ void FxPanel::updateDelayTimeLive(float envPos)
 
     if (dlyTimeLive.getText() != t)
         dlyTimeLive.setText(t, juce::dontSendNotification);
+}
+
+void FxPanel::updateStutterRateLive(float envPos)
+{
+    const float bip = (proc.getCurves().read(CurveStore::StutRate).evaluate(envPos) - 0.5f) * 2.0f;
+    const float mult = std::exp2((float)juce::roundToInt(bip * 2.0f));
+    const int baseIdx = (int)proc.apvts.getRawParameterValue("stutRate")->load();
+    const float beats = FxChain::stutterRateToBeats(baseIdx) * mult;
+
+    const auto names = FxChain::getStutterRateNames();
+    int best = 0; float bestErr = 1.0e9f;
+    for (int i = 0; i < names.size(); ++i)
+    {
+        const float e = std::abs(FxChain::stutterRateToBeats(i) - beats);
+        if (e < bestErr) { bestErr = e; best = i; }
+    }
+    juce::String t = (bestErr < 1.0e-3f) ? names[best] : juce::String(beats, 3) + " beat";
+    if (best != baseIdx || bestErr >= 1.0e-3f)
+        t = names[baseIdx] + "  >  " + t;
+
+    if (stutRateLive.getText() != t)
+        stutRateLive.setText(t, juce::dontSendNotification);
 }
 
 void FxPanel::updateDuckRateLive(float envPos)
@@ -236,15 +267,16 @@ std::vector<juce::Component*> FxPanel::componentsFor(int fx)
     case 3: return { &revAmt.knob, &revAmt.label, &revDecay.knob, &revDecay.label,
                      &revShimmer.knob, &revShimmer.label, &revDamp.knob, &revDamp.label,
                      &revMod.knob, &revMod.label };
-    default: return { &duckAmt.knob, &duckAmt.label, &duckRateBox, &duckRateLabel, &duckRateLive,
-                      &duckShape.knob, &duckShape.label };
+    case 4: return { &duckAmt.knob, &duckAmt.label, &duckRateBox, &duckRateLabel, &duckRateLive,
+                     &duckShape.knob, &duckShape.label };
+    default: return { &stutAmt.knob, &stutAmt.label, &stutRateBox, &stutRateLabel, &stutRateLive };
     }
 }
 
 // 選択中エフェクトのルーティングパラメーターへアタッチし直す
 void FxPanel::rebuildRouteAttachments()
 {
-    static const char* fxPrefix[5] = { "sat", "cho", "dly", "rev", "duck" };
+    static const char* fxPrefix[6] = { "sat", "cho", "dly", "rev", "duck", "stut" };
     static const char* srcIds[RiserEngine::kNumSources] = { "Osc1", "Osc2", "Osc3", "Noise" };
 
     for (int s = 0; s < RiserEngine::kNumSources; ++s)
@@ -252,16 +284,16 @@ void FxPanel::rebuildRouteAttachments()
         routeAtts[(size_t)s].reset();   // 先に解除してから張り替える
         routeAtts[(size_t)s] = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
             proc.apvts,
-            juce::String(fxPrefix[juce::jlimit(0, 4, activeFx)]) + "Route" + srcIds[s],
+            juce::String(fxPrefix[juce::jlimit(0, 5, activeFx)]) + "Route" + srcIds[s],
             *routeToggles[(size_t)s]);
     }
 }
 
 void FxPanel::setFx(int idx)
 {
-    activeFx = juce::jlimit(0, 4, idx);
+    activeFx = juce::jlimit(0, 5, idx);
 
-    for (int f = 0; f < 5; ++f)
+    for (int f = 0; f < 6; ++f)
         for (auto* c : componentsFor(f))
             c->setVisible(f == activeFx);
 
@@ -290,7 +322,7 @@ void FxPanel::setCurve(int idx)
     editor.setAccent(LiftColors::curveAccent(ci));
     editor.setTitle(CurveStore::name(ci));
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 6; ++i)
         styleTabButton(*fxTabs[(size_t)i], i == activeFx, LiftColors::accentFx);
     for (int i = 0; i < 3; ++i)
         styleTabButton(*curveTabs[(size_t)i], i == activeCurve, LiftColors::curveAccent(ci));
@@ -404,9 +436,9 @@ void FxPanel::resized()
 
     // ---- FXサブタブ行 ----
     auto tabRow = r.removeFromTop(28);
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 6; ++i)
     {
-        fxTabs[(size_t)i]->setBounds(tabRow.removeFromLeft(108));
+        fxTabs[(size_t)i]->setBounds(tabRow.removeFromLeft(92));
         tabRow.removeFromLeft(6);
     }
 
@@ -441,8 +473,10 @@ void FxPanel::resized()
                              &dlyTimeBox, &dlyTimeLabel, &dlyTimeLive); break;
     case 3: layoutDetailGrid(inner, { &revAmt, &revDecay, &revShimmer, &revDamp, &revMod },
                              nullptr, nullptr); break;
-    default: layoutDetailGrid(inner, { &duckAmt, &duckShape },
-                              &duckRateBox, &duckRateLabel, &duckRateLive); break;
+    case 4: layoutDetailGrid(inner, { &duckAmt, &duckShape },
+                             &duckRateBox, &duckRateLabel, &duckRateLive); break;
+    default: layoutDetailGrid(inner, { &stutAmt },
+                              &stutRateBox, &stutRateLabel, &stutRateLive); break;
     }
 
     r.removeFromLeft(8);

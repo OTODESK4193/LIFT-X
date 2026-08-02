@@ -687,6 +687,106 @@ namespace lfx
     };
 
     // ------------------------------------------
+    // Beat Stutter (テンポ同期ビートリピート)
+    //
+    //  ライザーで最も使われるのに今まで無かった演出。
+    //  グレイン(拍分割)を2つで1周期とし、
+    //   前半 = 生音をそのまま通しつつバッファへ記録
+    //   後半 = 直前に記録したグレインを繰り返す
+    //  という構成にしている。「同じ長さのグレインをその場で繰り返す」だけだと
+    //  入力と出力が一致して無音の変化しか起きないため、必ず半周期ずらす。
+    //
+    //  RATE をカーブで動かせば「終盤で刻みが細かくなる」定番の演出が一発で作れる。
+    //  PPQ同期なのでグリッドから外れない。
+    // ------------------------------------------
+    class BeatStutter
+    {
+    public:
+        void prepareToPlay(double sampleRate)
+        {
+            sr = juce::jmax(8000.0, sampleRate);
+            size = juce::jmax(8192, (int)(sr * 2.0));   // 最大2秒 (1拍@30BPM まで)
+            bufL.assign((size_t)size, 0.0f);
+            bufR.assign((size_t)size, 0.0f);
+            writePos = 0;
+            phase = 0.0f;
+            readOffset = 0;
+            captureStart = 0;
+            wasRepeat = false;
+            curAmt = 0.0f;
+            amtCoef = (float)(1.0 - std::exp(-1.0 / (0.004 * sr)));   // 4ms
+        }
+
+        void reset() noexcept
+        {
+            std::fill(bufL.begin(), bufL.end(), 0.0f);
+            std::fill(bufR.begin(), bufR.end(), 0.0f);
+            writePos = 0; readOffset = 0; captureStart = 0;
+            phase = 0.0f; wasRepeat = false; curAmt = 0.0f;
+        }
+
+        // ブロック頭でホストPPQへ位相同期 (2グレイン = 1周期)
+        void syncTo(double ppq, float grainBeats) noexcept
+        {
+            const double cycle = (double)juce::jmax(0.03125f, grainBeats) * 2.0;
+            phase = (float)(std::fmod(std::fmod(ppq, cycle) + cycle, cycle) / cycle);
+        }
+
+        void process(float& l, float& r, float amount, double bpm, float grainBeats) noexcept
+        {
+            if (bufL.empty()) return;
+
+            curAmt += amtCoef * (amount - curAmt);
+
+            const double safeBpm  = (bpm > 20.0 && bpm < 999.0) ? bpm : 120.0;
+            const float  gBeats   = juce::jmax(0.03125f, grainBeats);
+            const float  grainLen = juce::jlimit(32.0f, (float)(size / 2 - 2),
+                                                 (float)(sr * 60.0 / safeBpm * (double)gBeats));
+
+            // 入力は常に書き込む (AMT=0 でもバッファを新鮮に保つ)
+            bufL[(size_t)writePos] = l;
+            bufR[(size_t)writePos] = r;
+
+            // 位相を1サンプル進める (1周期 = 2グレイン)
+            phase += (float)((safeBpm / 60.0) / (sr * (double)gBeats * 2.0));
+            if (phase >= 1.0f) phase -= 1.0f;
+
+            const bool repeatPhase = (phase >= 0.5f);
+
+            // 後半へ入った瞬間に「直前の1グレイン」を読み出し開始位置として確定
+            if (repeatPhase && !wasRepeat)
+            {
+                captureStart = writePos - (int)grainLen;
+                while (captureStart < 0) captureStart += size;
+                readOffset = 0;
+            }
+            wasRepeat = repeatPhase;
+
+            float outL = l, outR = r;
+            if (repeatPhase && curAmt > 0.0005f)
+            {
+                int rp = captureStart + readOffset;
+                while (rp >= size) rp -= size;
+                outL = bufL[(size_t)rp];
+                outR = bufR[(size_t)rp];
+                if (++readOffset >= (int)grainLen) readOffset = 0;
+            }
+
+            if (++writePos >= size) writePos = 0;
+
+            l += (outL - l) * curAmt;
+            r += (outR - r) * curAmt;
+        }
+
+    private:
+        double sr = 44100.0;
+        int size = 0, writePos = 0, readOffset = 0, captureStart = 0;
+        float phase = 0.0f, curAmt = 0.0f, amtCoef = 0.01f;
+        bool wasRepeat = false;
+        std::vector<float> bufL, bufR;
+    };
+
+    // ------------------------------------------
     // ADAA Saturation
     // ------------------------------------------
     struct SaturationState
@@ -814,11 +914,13 @@ public:
     static constexpr int kNumSlots = 5;
     static constexpr int kNumSources = 4;   // OSC1-3 + Noise (RiserEngine と対応)
 
-    enum FxType { None = 0, Saturation, Chorus, Delay, Reverb, Ducking };
+    // ※ 末尾追加のみ (既存プリセットの fx*Type インデックス互換のため)
+    enum FxType { None = 0, Saturation, Chorus, Delay, Reverb, Ducking, Stutter };
+    static constexpr int kNumFxKinds = 6;   // None を除いた実効FX数
 
     static juce::StringArray getTypeNames()
     {
-        return { "None", "Saturation", "Chorus", "Delay", "Reverb", "Ducking" };
+        return { "None", "Saturation", "Chorus", "Delay", "Reverb", "Ducking", "Stutter" };
     }
     static juce::StringArray getSatAlgoNames()
     {
@@ -842,6 +944,10 @@ public:
                                          0.5f, 1.0f / 3.0f, 0.375f, 0.25f, 1.0f / 6.0f };
         return beats[juce::jlimit(0, 9, idx)];
     }
+
+    // Stutterのグレイン長 (Duckと同じ拍表を流用)
+    static juce::StringArray getStutterRateNames() { return getDuckRateNames(); }
+    static float stutterRateToBeats(int idx) noexcept { return duckRateToBeats(idx); }
 
     // Duckingレート表 (1サイクルの拍数, 1Bar〜1/64, 付点/三連対応)
     static juce::StringArray getDuckRateNames()
@@ -895,19 +1001,23 @@ public:
         float revDamp = 0.3f;
         float revMod = 0.4f;
 
+        // --- Stutter ---
+        float stutAmt = 0.0f;
+        float stutBeats = 0.25f;    // 合成済みグレイン長 (拍)
+
         // --- Ducking ---
         float duckAmt = 0.0f;
         float duckBeats = 1.0f;     // 合成済み拍数
         float duckShape = 2.0f;     // 0.5..8
 
         // --- エフェクト種別ごとのソース別ルーティング ---
-        //  route[効果][ソース] : 効果 = 0:Sat 1:Cho 2:Dly 3:Rev 4:Duck
+        //  route[効果][ソース] : 効果 = 0:Sat 1:Cho 2:Dly 3:Rev 4:Duck 5:Stutter
         //                       ソース = 0:OSC1 1:OSC2 2:OSC3 3:Noise
         //  false のソースはそのエフェクトを完全にバイパスして素通しする。
-        std::array<std::array<bool, kNumSources>, 5> route {{
+        std::array<std::array<bool, kNumSources>, kNumFxKinds> route {{
             { true, true, true, true }, { true, true, true, true },
             { true, true, true, true }, { true, true, true, true },
-            { true, true, true, true } }};
+            { true, true, true, true }, { true, true, true, true } }};
     };
 
     void prepare(double sr)
@@ -917,6 +1027,7 @@ public:
         delay.prepareToPlay(sr);
         reverb.prepareToPlay(sr);
         ducker.prepareToPlay(sr);
+        stutter.prepareToPlay(sr);
         dcCoef = std::exp((float)(-1.0 / (0.004523 * sr)));
         for (int ch = 0; ch < 2; ++ch) { satState[ch].reset(); dcState[ch] = 0.0f; }
 
@@ -924,6 +1035,7 @@ public:
         //  ブロックレート更新による段差 (ジッパーノイズ) を除去する。
         //  ※ Delayのamt/fb/time、ReverbのcurAmount、DuckerのgainSm は各FX内部で平滑済み。
         modSmCoef = 1.0f - std::exp((float)(-1.0 / (0.010 * sr)));
+        stutAmtSm = 0.0f;
         satAmtSm = satDriveSm = 0.0f;
         choAmtSm = choDepthSm = 0.0f;
         revAmtSm = revShimSm = 0.0f;
@@ -967,7 +1079,10 @@ public:
 
         // Ducking: 再生中はブロック頭でPPQへ位相同期
         if (p.playing)
+        {
             ducker.syncTo(p.ppq, p.duckBeats);
+            stutter.syncTo(p.ppq, p.stutBeats);
+        }
 
         // スロット間ソフトクリップ
         auto interSlotClip = [](float x) noexcept -> float
@@ -987,6 +1102,7 @@ public:
             choAmtSm = p.choAmt;   choDepthSm = p.choDepth;
             revAmtSm = p.revAmt;   revShimSm = p.revShimmer;
             duckAmtSm = p.duckAmt; duckShapeSm = p.duckShape;
+            stutAmtSm = p.stutAmt;
         }
 
         // ---- スロットの解決をブロック先頭で1回だけ済ませる ----
@@ -1005,7 +1121,7 @@ public:
         {
             const int t = p.type[(size_t)s];
             if (t <= 0) continue;
-            const auto& rt = p.route[(size_t)juce::jlimit(0, 4, t - 1)];
+            const auto& rt = p.route[(size_t)juce::jlimit(0, kNumFxKinds - 1, t - 1)];
             int n = 0;
             for (int k = 0; k < kNumSources; ++k)
                 if (rt[(size_t)k]) ++n;
@@ -1027,6 +1143,7 @@ public:
             revShimSm   += modSmCoef * (p.revShimmer - revShimSm);
             duckAmtSm   += modSmCoef * (p.duckAmt - duckAmtSm);
             duckShapeSm += modSmCoef * (p.duckShape - duckShapeSm);
+            stutAmtSm   += modSmCoef * (p.stutAmt - stutAmtSm);
 
             for (int s = 0; s < kNumSlots; ++s)
             {
@@ -1066,6 +1183,9 @@ public:
                             break;
                         case Reverb:
                             reverb.process(oL, oR, revAmtSm, p.revDecay, revShimSm, p.revDamp, p.revMod);
+                            break;
+                        case Stutter:
+                            stutter.process(oL, oR, stutAmtSm, p.bpm, p.stutBeats);
                             break;
                         default: break;
                         }
@@ -1132,6 +1252,7 @@ private:
     lfx::TapeDelay delay;
     lfx::ShimmerReverb reverb;
     lfx::BeatDucker ducker;
+    lfx::BeatStutter stutter;
 
     lfx::SaturationState satState[2];
     float dcState[2] = { 0.0f, 0.0f };
@@ -1146,6 +1267,7 @@ private:
     float choAmtSm = 0.0f, choDepthSm = 0.5f;
     float revAmtSm = 0.0f, revShimSm = 0.4f;
     float duckAmtSm = 0.0f, duckShapeSm = 2.0f;
+    float stutAmtSm = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FxChain)
 };

@@ -102,6 +102,7 @@ public:
         setupKnob(velCutKnob,   velCutLabel,   "VEL > CUTOFF",  "velToCutoff");
         setupKnob(velNoiseKnob, velNoiseLabel, "VEL > NOISE",   "velToNoise");
         setupKnob(velDriveKnob, velDriveLabel, "VEL > DRIVE",   "velToDrive");
+        setupKnob(humanizeKnob, humanizeLabel, "HUMANIZE",      "humanize");
 
         playInfo.setFont(juce::Font(juce::FontOptions(11.5f)));
         playInfo.setColour(juce::Label::textColourId, LiftColors::textDim);
@@ -112,7 +113,9 @@ public:
             "the riser arrives on it). OSC 1's keys are the reference, so all oscillators "
             "shift together and their intervals are preserved.\n"
             "VELOCITY - 0% keeps the original behaviour. Above 0, playing softer darkens "
-            "the filter, pulls the noise layer back and reduces saturation drive.",
+            "the filter, pulls the noise layer back and reduces saturation drive.\n"
+            "HUMANIZE - adds a slow organic drift to the envelope position so the "
+            "riser is not perfectly mechanical. 0% = off.",
             juce::dontSendNotification);
         playInfo.setJustificationType(juce::Justification::topLeft);
         addAndMakeVisible(playInfo);
@@ -249,10 +252,10 @@ public:
 
             pa.removeFromTop(6);
             auto velRow = pa.removeFromTop(96);
-            ValueKnob* vk[3] = { &velCutKnob, &velNoiseKnob, &velDriveKnob };
-            juce::Label* vl[3] = { &velCutLabel, &velNoiseLabel, &velDriveLabel };
-            const int vw = velRow.getWidth() / 3;
-            for (int i = 0; i < 3; ++i)
+            ValueKnob* vk[4] = { &velCutKnob, &velNoiseKnob, &velDriveKnob, &humanizeKnob };
+            juce::Label* vl[4] = { &velCutLabel, &velNoiseLabel, &velDriveLabel, &humanizeLabel };
+            const int vw = velRow.getWidth() / 4;
+            for (int i = 0; i < 4; ++i)
             {
                 auto c = velRow.removeFromLeft(vw);
                 vl[i]->setBounds(c.removeFromTop(16));
@@ -338,8 +341,8 @@ private:
     // ---- KEY FOLLOW / VELOCITY ----
     juce::ComboBox keyFollowBox;
     juce::Label keyFollowLabel, playInfo;
-    ValueKnob velCutKnob, velNoiseKnob, velDriveKnob;
-    juce::Label velCutLabel, velNoiseLabel, velDriveLabel;
+    ValueKnob velCutKnob, velNoiseKnob, velDriveKnob, humanizeKnob;
+    juce::Label velCutLabel, velNoiseLabel, velDriveLabel, humanizeLabel;
 
     std::unique_ptr<GlowToggle> limOn;
     ValueKnob ceilKnob, relKnob;

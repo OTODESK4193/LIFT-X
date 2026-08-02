@@ -25,15 +25,44 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         proc.apvts, "reverse", *reverseButton));
 
     // ---- RANDOM: MAIN/OSC ENVを音楽的な範囲でランダマイズ ----
-    randomButton.setButtonText("RANDOM");
-    addAndMakeVisible(randomButton);
-    randomButton.onClick = [this]
+    auto afterRandomise = [this]
     {
-        proc.randomizeMainAndOsc();
         refreshKeyButtons();
         for (int i = 0; i < 3; ++i)
             refreshWaveDisplay(i);
+        // カーブが入れ替わるので、他タブのエディタも読み直させる
+        if (auto* top = getParentComponent())
+            top->postCommandMessage(0);
     };
+
+    randomButton.setButtonText("RANDOM");
+    randomButton.setTooltip("Randomise MAIN + OSC ENV within musically safe ranges");
+    addAndMakeVisible(randomButton);
+    randomButton.onClick = [this, afterRandomise]
+    {
+        proc.randomizeMainAndOsc(lockOscBtn->getToggleState(),
+                                 lockCurveBtn->getToggleState());
+        afterRandomise();
+    };
+
+    // MUTATE: 気に入った音を壊さずに近傍を探索する
+    mutateButton.setButtonText("MUTATE");
+    mutateButton.setTooltip("Nudge the current sound slightly (hold Shift for a bigger jump)");
+    addAndMakeVisible(mutateButton);
+    mutateButton.onClick = [this, afterRandomise]
+    {
+        const bool big = juce::ModifierKeys::getCurrentModifiers().isShiftDown();
+        proc.mutateMainAndOsc(big ? 0.35f : 0.12f);
+        afterRandomise();
+    };
+
+    // ロックトグル (RANDOM の対象から外す)
+    lockOscBtn   = std::make_unique<GlowToggle>("LOCK OSC",  LiftColors::peach);
+    lockCurveBtn = std::make_unique<GlowToggle>("LOCK ENV",  LiftColors::peach);
+    lockOscBtn->setTooltip("Keep oscillator settings when pressing RANDOM");
+    lockCurveBtn->setTooltip("Keep envelope curves when pressing RANDOM");
+    addAndMakeVisible(*lockOscBtn);
+    addAndMakeVisible(*lockCurveBtn);
 
     addAndMakeVisible(progressStrip);
     addAndMakeVisible(waveStrip);
@@ -399,13 +428,22 @@ void MainPanel::resized()
         liftCell.knob.setBounds(liftArea.reduced(2));
     }
     {
-        auto barsArea = top.removeFromLeft(92).reduced(4, 0);
-        barsLabel.setBounds(barsArea.removeFromTop(18));
-        barsBox.setBounds(barsArea.removeFromTop(26).reduced(2, 0));
-        barsArea.removeFromTop(10);
-        reverseButton->setBounds(barsArea.removeFromTop(24).reduced(2, 0));
-        barsArea.removeFromTop(6);
-        randomButton.setBounds(barsArea.removeFromTop(24).reduced(2, 0));
+        auto barsArea = top.removeFromLeft(104).reduced(4, 0);
+        barsLabel.setBounds(barsArea.removeFromTop(16));
+        barsBox.setBounds(barsArea.removeFromTop(24).reduced(2, 0));
+        barsArea.removeFromTop(4);
+        reverseButton->setBounds(barsArea.removeFromTop(20).reduced(2, 0));
+        barsArea.removeFromTop(3);
+        {
+            auto row = barsArea.removeFromTop(20).reduced(2, 0);
+            randomButton.setBounds(row.removeFromLeft(row.getWidth() / 2 - 2));
+            row.removeFromLeft(4);
+            mutateButton.setBounds(row);
+        }
+        barsArea.removeFromTop(3);
+        lockOscBtn->setBounds(barsArea.removeFromTop(18).reduced(2, 0));
+        barsArea.removeFromTop(2);
+        lockCurveBtn->setBounds(barsArea.removeFromTop(18).reduced(2, 0));
     }
 
     KnobCell* globals[2] = { &attackCell, &releaseCell };

@@ -45,11 +45,12 @@ private:
         int curveIdx[3];
         const char* curveNames[3];
     };
-    static const std::array<FxDef, 5>& defs();
+    static const std::array<FxDef, 6>& defs();
 
     void timerCallback() override;
     void updateDelayTimeLive(float envPos);
     void updateDuckRateLive(float envPos);
+    void updateStutterRateLive(float envPos);
     void mkKnob(Cell& c, const juce::String& text, const juce::String& paramId, int accentId);
     void mkCombo(juce::ComboBox& box, juce::Label& label, const juce::String& text,
                  const juce::String& paramId, const juce::StringArray& items);
@@ -69,7 +70,7 @@ private:
     std::array<juce::ComboBox, FxChain::kNumSlots> slotType;
 
     // ---- FXサブタブ + カーブサブタブ ----
-    std::array<std::unique_ptr<juce::TextButton>, 5> fxTabs;
+    std::array<std::unique_ptr<juce::TextButton>, 6> fxTabs;
     std::array<std::unique_ptr<juce::TextButton>, 3> curveTabs;
     int activeFx = 0;
     int activeCurve = 0;
@@ -96,6 +97,10 @@ private:
     Cell duckAmt, duckShape;
     juce::ComboBox duckRateBox;
     juce::Label duckRateLabel;
+
+    Cell stutAmt;
+    juce::ComboBox stutRateBox;
+    juce::Label stutRateLabel, stutRateLive;
 
     // ---- ソース別ルーティング (選択中のエフェクトに追従) ----
     void rebuildRouteAttachments();

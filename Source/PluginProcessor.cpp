@@ -420,6 +420,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
     add(std::make_unique<FloatP>(juce::ParameterID{"velToDrive", 1}, "Vel > Sat Drive",
         juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, attr(pctStr)));
 
+    // ---- Stutter (FXスロット6番目) ----
+    add(std::make_unique<FloatP>(juce::ParameterID{"stutAmt", 1}, "Stutter Amt",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, attr(pctStr)));
+    add(std::make_unique<ChoiceP>(juce::ParameterID{"stutRate", 1}, "Stutter Rate",
+        FxChain::getStutterRateNames(), 11));   // 既定 1/16
+    for (int s2 = 0; s2 < RiserEngine::kNumSources; ++s2)
+        add(std::make_unique<BoolP>(juce::ParameterID{ juce::String("stutRoute") + srcNames[s2], 1 },
+                                    juce::String("Stutter ") + srcNames[s2], true));
+
+    // ---- HUMANIZE: ENV評価位置へゆっくりしたランダムな揺れを加える ----
+    //  完全に機械的なライザーに有機的な「息づかい」を足す。0% で従来と同一。
+    add(std::make_unique<FloatP>(juce::ParameterID{"humanize", 1}, "Humanize",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, attr(pctStr)));
+
     return { params.begin(), params.end() };
 }
 
@@ -491,6 +505,12 @@ void LiftXAudioProcessor::cacheParameterPointers()
     pRevDamp = p("revDamp"); pRevMod = p("revMod");
     pDuckAmt = p("duckAmt"); pDuckRate = p("duckRate"); pDuckShape = p("duckShape");
     pLimOn = p("limOn"); pLimCeiling = p("limCeiling"); pLimRelease = p("limRelease");
+
+    pStutAmt  = p("stutAmt");
+    pStutRate = p("stutRate");
+    for (int s2 = 0; s2 < RiserEngine::kNumSources; ++s2)
+        pFxRoute[5][(size_t)s2] = p(juce::String("stutRoute") + srcNames[s2]);
+    pHumanize = p("humanize");
 
     pKeyFollow   = p("keyFollow");
     pVelToCutoff = p("velToCutoff");
@@ -930,6 +950,7 @@ void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noex
     ep.scaleKey = (int)pScaleKey->load();
     ep.scaleType = (int)pScaleType->load();
     ep.keyFollowMode = pKeyFollow != nullptr ? (int)pKeyFollow->load() : 0;
+    ep.humanize = pHumanize != nullptr ? pHumanize->load() : 0.0f;
     ep.velToCutoff = pVelToCutoff != nullptr ? pVelToCutoff->load() : 0.0f;
     ep.velToNoise  = pVelToNoise  != nullptr ? pVelToNoise->load()  : 0.0f;
 
@@ -986,9 +1007,10 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
     for (int s = 0; s < FxChain::kNumSlots; ++s)
         fp.type[(size_t)s] = (int)pFxType[(size_t)s]->load();
 
-    for (int f = 0; f < 5; ++f)
+    for (int f = 0; f < FxChain::kNumFxKinds; ++f)
         for (int s = 0; s < RiserEngine::kNumSources; ++s)
-            fp.route[(size_t)f][(size_t)s] = pFxRoute[(size_t)f][(size_t)s]->load() > 0.5f;
+            if (pFxRoute[(size_t)f][(size_t)s] != nullptr)
+                fp.route[(size_t)f][(size_t)s] = pFxRoute[(size_t)f][(size_t)s]->load() > 0.5f;
 
     // マルチENVカーブによるバイポーラ加算変調 (中央=ノブ値, ±レンジ半分)
     //  評価位置はエンジンが実際に使った値をそのまま貰う。
@@ -1042,6 +1064,14 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
     fp.duckBeats = FxChain::duckRateToBeats((int)pDuckRate->load())
                  * std::exp2((float)juce::roundToInt(bip(CurveStore::DuckRate) * 2.0f));
     fp.duckShape = juce::jlimit(0.5f, 8.0f, pDuckShape->load() + bip(CurveStore::DuckShape) * 7.5f);
+
+    // ---- Stutter ----
+    fp.stutAmt = c01((pStutAmt != nullptr ? pStutAmt->load() : 0.0f)
+                     + bip(CurveStore::StutAmt) * 1.0f);
+    //  グレイン長: Duck と同じく ±2オクターブを整数段へ量子化
+    //  (連続変化させると拍から外れて気持ち悪くなるため)
+    fp.stutBeats = FxChain::stutterRateToBeats(pStutRate != nullptr ? (int)pStutRate->load() : 11)
+                 * std::exp2((float)juce::roundToInt(bip(CurveStore::StutRate) * 2.0f));
 }
 
 // ==========================================================
@@ -1058,7 +1088,7 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
 //   - Pitchカーブは単調 → 上がったり下がったりする不自然な動きを避ける
 //   - Scaleクオンタイズが有効ならキーをスケール構成音へスナップ
 // ==========================================================
-void LiftXAudioProcessor::randomizeMainAndOsc()
+void LiftXAudioProcessor::randomizeMainAndOsc(bool lockOsc, bool lockCurves)
 {
     juce::Random rng((juce::int64)juce::Time::getHighResolutionTicks());
 
@@ -1098,7 +1128,7 @@ void LiftXAudioProcessor::randomizeMainAndOsc()
     // COARSE候補: ユニゾン/オクターブ/完全5度/長短3度など和声的な度数のみ
     static const int kChordSteps[] = { 0, 0, 0, 12, -12, 7, -5, 3, 4, 5, 12, 7 };
 
-    for (int i = 1; i <= RiserEngine::kNumOscs; ++i)
+    for (int i = 1; i <= RiserEngine::kNumOscs && !lockOsc; ++i)
     {
         const juce::String n(i);
         const bool on = (i <= numActive);
@@ -1126,6 +1156,8 @@ void LiftXAudioProcessor::randomizeMainAndOsc()
 
     // ---- ノイズ ----
     const bool useNoise = chance(0.6f);
+    if (!lockOsc)
+    {
     setP("noiseSolo", 0.0f);
     setP("noiseMute", 0.0f);
     setP("noiseType",  (float)ri(0, 2));
@@ -1133,6 +1165,7 @@ void LiftXAudioProcessor::randomizeMainAndOsc()
     setP("noisePitch", rlog(200.0f, 6000.0f));
     setP("noiseRes",   rf(0.8f, 5.0f));
     setP("noiseRange", rf(2.0f, 7.0f));
+    }
 
     // ---- OSC ENV カーブ (0-11 = OSC1-3 の Pitch/Level/Detune/Spread, 12-14 = Noise) ----
     //  FILTER Cutoff(15-18) / FILTER Res(19-22) / FX(23-34) のカーブは対象外
@@ -1143,7 +1176,7 @@ void LiftXAudioProcessor::randomizeMainAndOsc()
         return s;
     };
 
-    for (int o = 0; o < RiserEngine::kNumOscs; ++o)
+    for (int o = 0; o < RiserEngine::kNumOscs && !lockCurves; ++o)
     {
         // PITCH: 必ず 0→1 の単調上昇 (Start→End)。テンションで加速/減速だけ変える
         mCurves.publish(CurveStore::oscCurve(o, 0), makeCurve(0.0f, 1.0f, rf(-0.5f, 0.7f)));
@@ -1163,6 +1196,8 @@ void LiftXAudioProcessor::randomizeMainAndOsc()
     }
 
     // ノイズ: PITCH は上昇、LEVEL はフェードイン、RES はほぼ据え置き
+    if (!lockCurves)
+    {
     mCurves.publish(CurveStore::NoisePitch, makeCurve(rf(0.30f, 0.45f), rf(0.85f, 1.0f), rf(-0.3f, 0.6f)));
     mCurves.publish(CurveStore::NoiseLevel,
         useNoise ? makeCurve(rf(0.20f, 0.40f), rf(0.80f, 1.0f), rf(-0.2f, 0.6f))
@@ -1170,6 +1205,7 @@ void LiftXAudioProcessor::randomizeMainAndOsc()
     mCurves.publish(CurveStore::NoiseRes,
         chance(0.7f) ? makeCurve(0.5f, 0.5f, 0.0f)
                      : makeCurve(rf(0.4f, 0.5f), rf(0.55f, 0.75f), 0.0f));
+    }
 
     // Scaleクオンタイズが有効なら Start/End キーを構成音へ寄せる
     snapKeysToScale();
@@ -1178,6 +1214,78 @@ void LiftXAudioProcessor::randomizeMainAndOsc()
     mCurrentPresetName = "Random";
     mCurrentFactoryIndex = -1;
     mCurrentUserFile = juce::File();
+}
+
+// ==========================================================
+// MUTATE (メッセージスレッド専用)
+//  RANDOM が「全部作り直す」のに対し、こちらは現在の音を起点に
+//  近傍だけを探索する。気に入った音を少しずつ育てられる。
+//
+//  ・連続値パラメーターは正規化値へ ±amount の揺らぎを加える
+//  ・On/Off や Choice 系は触らない (構成が変わると別の音になってしまう)
+//  ・カーブは制御点の y とテンションだけを軽く揺らす (x は動かさない)
+//  ・MASTER / FX / FILTER / CONFIG は RANDOM と同じく対象外
+// ==========================================================
+void LiftXAudioProcessor::mutateMainAndOsc(float amount)
+{
+    const float amt = juce::jlimit(0.01f, 0.5f, amount);
+    juce::Random rng((juce::int64)juce::Time::getHighResolutionTicks());
+
+    auto jitter = [&](const juce::String& id, float scale = 1.0f)
+    {
+        auto* prm = apvts.getParameter(id);
+        if (prm == nullptr) return;
+        const float cur = prm->getValue();                       // 0..1 正規化値
+        const float d = (rng.nextFloat() * 2.0f - 1.0f) * amt * scale;
+        prm->setValueNotifyingHost(juce::jlimit(0.0f, 1.0f, cur + d));
+    };
+
+    for (int i = 1; i <= RiserEngine::kNumOscs; ++i)
+    {
+        const juce::String n(i);
+        jitter("osc" + n + "Level");
+        jitter("osc" + n + "Det");
+        jitter("osc" + n + "Spread");
+        jitter("osc" + n + "Pos");
+        jitter("osc" + n + "Pan", 0.6f);
+        jitter("osc" + n + "Fine", 0.5f);
+        // キーは音域が飛ばないよう控えめに
+        jitter("osc" + n + "KeyStart", 0.25f);
+        jitter("osc" + n + "KeyEnd", 0.25f);
+    }
+
+    jitter("noiseLevel");
+    jitter("noisePitch", 0.7f);
+    jitter("noiseRes");
+    jitter("noiseRange", 0.7f);
+    jitter("noisePan", 0.6f);
+    jitter("attack", 0.5f);
+    jitter("release", 0.5f);
+
+    // ---- カーブ: 形の「気配」を残したまま少し崩す ----
+    static const int kMutCurves[] = {
+        CurveStore::Osc1Pitch, CurveStore::Osc1Level, CurveStore::Osc1Detune, CurveStore::Osc1Spread,
+        CurveStore::Osc2Pitch, CurveStore::Osc2Level,
+        CurveStore::Osc3Pitch, CurveStore::Osc3Level,
+        CurveStore::NoisePitch, CurveStore::NoiseLevel, CurveStore::NoiseRes };
+
+    for (int idx : kMutCurves)
+    {
+        auto c = mCurves.get(idx);
+        for (int i = 0; i < c.numPoints; ++i)
+        {
+            c.pts[(size_t)i].y = juce::jlimit(0.0f, 1.0f,
+                c.pts[(size_t)i].y + (rng.nextFloat() * 2.0f - 1.0f) * amt * 0.35f);
+            c.pts[(size_t)i].curve = juce::jlimit(-1.0f, 1.0f,
+                c.pts[(size_t)i].curve + (rng.nextFloat() * 2.0f - 1.0f) * amt * 0.8f);
+        }
+        mCurves.publish(idx, c);
+    }
+
+    snapKeysToScale();
+    rememberSnapState();
+    mCurrentPresetName = mCurrentPresetName.endsWith("*") ? mCurrentPresetName
+                                                          : mCurrentPresetName + "*";
 }
 
 // ==========================================================

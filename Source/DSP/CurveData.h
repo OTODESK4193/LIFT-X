@@ -223,7 +223,9 @@ public:
         //  中央=センター / 上=右 / 下=左。ソース毎に定位を動かせるため
         //  「左から右へ駆け上がる」立体的なライザーが作れる。
         Osc1Pan = 35, Osc2Pan, Osc3Pan, NoisePan,
-        kNumCurves // = 39
+        // ---- v0.6 追加: Stutter ----
+        StutAmt = 39, StutRate,
+        kNumCurves // = 41
     };
 
     // ソース(0-2=OSC1-3, 3=Noise) → PANカーブ番号
@@ -257,7 +259,8 @@ public:
             "DELAY AMT", "DELAY FB", "DELAY TIME",
             "REVERB AMT", "REVERB SHIMMER",
             "DUCK AMT", "DUCK RATE", "DUCK SHAPE",
-            "OSC1 PAN", "OSC2 PAN", "OSC3 PAN", "NOISE PAN" };
+            "OSC1 PAN", "OSC2 PAN", "OSC3 PAN", "NOISE PAN",
+            "STUTTER AMT", "STUTTER RATE" };
         return names[juce::jlimit(0, kNumCurves - 1, idx)];
     }
 
