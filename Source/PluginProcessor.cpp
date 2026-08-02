@@ -473,7 +473,8 @@ void LiftXAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     mPreparedBlockSize = juce::jmax(16, samplesPerBlock);
     mMaxBlockSize = juce::jmax(mPreparedBlockSize * 2, 8192);
 
-    mEngine.prepare(sampleRate);
+    // LIFT(MANUAL)の平滑時定数をブロック長へ追従させるため、ブロック長も渡す
+    mEngine.prepare(sampleRate, mPreparedBlockSize);
     mFx.prepare(sampleRate);
     mLimiter.prepare(sampleRate);
 
@@ -560,42 +561,15 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     // getTailLengthSeconds() はプレイヘッドを参照できないため、ここで保持しておく
     mLastBpm.store(bpm, std::memory_order_relaxed);
 
-    // ---- MIDI ----
-    bool noteOnThisBlock = false;
-    const double qnPerSample = (bpm / 60.0) / mPreparedSampleRate;
-    for (const auto meta : midi)
-    {
-        const auto msg = meta.getMessage();
-        if (msg.isNoteOn())
-        {
-            noteOnThisBlock = true;
-            const double ppqAtEvent = hasPpq && playing
-                ? ppq + (double)meta.samplePosition * qnPerSample : ppq;
-            mEngine.noteOn(msg.getNoteNumber(), msg.getFloatVelocity(), ppqAtEvent, playing && hasPpq);
-
-            // MIDI Learn 用 (GUIがStartKey/EndKey設定に使用)
-            mLastNote.store(msg.getNoteNumber(), std::memory_order_relaxed);
-            mNoteEvents.fetch_add(1, std::memory_order_relaxed);
-        }
-        else if (msg.isNoteOff())
-        {
-            mEngine.noteOff(msg.getNoteNumber());
-        }
-        else if (msg.isAllNotesOff() || msg.isAllSoundOff())
-        {
-            mEngine.allNotesOff();
-        }
-    }
-
-    // ---- DAW同期 ----
+    // ---- DAW同期 (レンダリング前に progInc / totalQn を確定させる) ----
     const double bars = barsFromChoice((int)pBars->load());
     mEngine.syncTransport(playing, hasPpq, ppq, bpm, qnPerBar, bars);
 
-    // ---- エンジンレンダリング ----
+    // ---- エンジンパラメーター収集 ----
     RiserEngine::Params ep;
     gatherEngineParams(ep);
 
-    // ---- ソース別バスへレンダリング ----
+    // ---- ソース別バス ----
     //  FXのソース別ルーティングのため、OSC1/2/3/Noise を分離したまま
     //  FXチェーンへ渡し、最後にまとめて出力バッファへ合算する。
     float* busL[RiserEngine::kNumSources];
@@ -608,7 +582,69 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         juce::FloatVectorOperations::clear(busR[s], numSamples);
     }
 
-    mEngine.render(busL, busR, numSamples, ep, mCurves);
+    // ---- MIDI + レンダリング (サンプルアキュレート) ----
+    //  MIDIイベントの位置でブロックを分割してレンダリングする。
+    //  従来はブロック先頭でまとめてノートオンを適用してからブロック全体を
+    //  描画していたため、ライザーの立ち上がりが最大1ブロック
+    //  (512サンプル @48kHz = 10.7ms) 早くなることがあった。
+    //  Ducking は PPQ 同期でグリッドに正確に張り付くので、この差は
+    //  「ライザーだけが前へずれる」形で効いていた。
+    bool noteOnThisBlock = false;
+    int  noteOnSample = 0;              // ブロック内でのノートオン位置 (キャプチャ用)
+    const double qnPerSample = (bpm / 60.0) / mPreparedSampleRate;
+    int rendered = 0;
+
+    auto renderUpTo = [&](int endSample)
+    {
+        const int n = endSample - rendered;
+        if (n <= 0) return;
+
+        float* segL[RiserEngine::kNumSources];
+        float* segR[RiserEngine::kNumSources];
+        for (int s = 0; s < RiserEngine::kNumSources; ++s)
+        {
+            segL[s] = busL[s] + rendered;
+            segR[s] = busR[s] + rendered;
+        }
+        mEngine.render(segL, segR, n, ep, mCurves);
+        rendered = endSample;
+    };
+
+    for (const auto meta : midi)
+    {
+        const auto msg = meta.getMessage();
+        const bool isNoteOn  = msg.isNoteOn();
+        const bool isNoteOff = msg.isNoteOff();
+        const bool isAllOff  = msg.isAllNotesOff() || msg.isAllSoundOff();
+        if (!isNoteOn && !isNoteOff && !isAllOff)
+            continue;
+
+        // イベント位置まで先に描いてから、その瞬間にイベントを適用する
+        const int evPos = juce::jlimit(0, numSamples, meta.samplePosition);
+        renderUpTo(evPos);
+
+        if (isNoteOn)
+        {
+            noteOnThisBlock = true;
+            noteOnSample = evPos;
+            const double ppqAtEvent = hasPpq && playing
+                ? ppq + (double)evPos * qnPerSample : ppq;
+            mEngine.noteOn(msg.getNoteNumber(), msg.getFloatVelocity(), ppqAtEvent, playing && hasPpq);
+
+            // MIDI Learn 用 (GUIがStartKey/EndKey設定に使用)
+            mLastNote.store(msg.getNoteNumber(), std::memory_order_relaxed);
+            mNoteEvents.fetch_add(1, std::memory_order_relaxed);
+        }
+        else if (isNoteOff)
+        {
+            mEngine.noteOff(msg.getNoteNumber());
+        }
+        else
+        {
+            mEngine.allNotesOff();
+        }
+    }
+    renderUpTo(numSamples);
 
     // ---- FXチェーン (カーブ変調をブロックレートで合成) ----
     FxChain::Params fp;
@@ -702,11 +738,17 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
         if (mCapturing)
         {
-            const int cap = (int)mCapL.size();
-            const int nWrite = juce::jmin(numSamples, cap - mCapWrite);
+            // ノートオンがブロック途中だった場合、その手前(=前のライザーのテール)は
+            // 録らずに切り落とす。こうしないと録音の頭に無関係な残響が混ざる。
+            const int srcStart = noteOnThisBlock ? noteOnSample : 0;
+            const int nAvail   = numSamples - srcStart;
 
-            const float* sl  = buffer.getReadPointer(0);
-            const float* sr2 = buffer.getNumChannels() > 1 ? buffer.getReadPointer(1) : sl;
+            const int cap = (int)mCapL.size();
+            const int nWrite = juce::jmin(nAvail, cap - mCapWrite);
+
+            const float* sl  = buffer.getReadPointer(0) + srcStart;
+            const float* sr2 = (buffer.getNumChannels() > 1
+                                ? buffer.getReadPointer(1) : buffer.getReadPointer(0)) + srcStart;
 
             if (nWrite > 0)
             {
@@ -741,10 +783,10 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
                 for (int i = 0; i < nWrite; ++i)
                     pk = juce::jmax(pk, std::abs(sl[i]), std::abs(sr2[i]));
 
-                if (pk < kSilenceThresh) mCapSilentRun += juce::jmax(nWrite, numSamples);
+                if (pk < kSilenceThresh) mCapSilentRun += juce::jmax(nWrite, nAvail);
                 else                     mCapSilentRun = 0;
 
-                mCapTailWritten += numSamples;
+                mCapTailWritten += nAvail;
 
                 const bool silent    = mCapSilentRun >= mCapSilenceHold;
                 const bool tailMaxed = mCapTailWritten >= mCapTailCap;
@@ -889,12 +931,11 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
             fp.route[(size_t)f][(size_t)s] = pFxRoute[(size_t)f][(size_t)s]->load() > 0.5f;
 
     // マルチENVカーブによるバイポーラ加算変調 (中央=ノブ値, ±レンジ半分)
-    //  評価位置: Auto=Progress / Manual=LIFTノブ (エンジンと同一規則)
-    const bool liftAuto = pLiftMode->load() > 0.5f;
-    float evalPos = juce::jlimit(0.0f, 1.0f,
-        liftAuto ? mEngine.getProgressF() : pLift->load());
-    if (pReverse->load() > 0.5f)
-        evalPos = 1.0f - evalPos;   // REVERSE: エンジンと同一規則
+    //  評価位置はエンジンが実際に使った値をそのまま貰う。
+    //  (Auto/Manual の切り替え・REVERSE・平滑はすべてエンジン側で適用済み)
+    //  こうすることでオシレーターとFXが必ず同じカーブ位置を読む。
+    const float evalPos = juce::jlimit(0.0f, 1.0f, mEngine.getEvalPos());
+
     // FX側もセグメント探索ヒントを共有する (エンジンとは別配列)
     auto bip = [this, evalPos](int idx) noexcept
     {

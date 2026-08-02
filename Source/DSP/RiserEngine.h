@@ -105,9 +105,14 @@ public:
             wavetables[(size_t)osc] = wt;
     }
 
-    void prepare(double sampleRate) noexcept
+    //  maxBlockSize: ホストが渡してくる想定最大ブロック長。
+    //   LIFT を手動/オートメーションで動かす場合、APVTS はブロック先頭の値しか
+    //   返さないため評価位置が「ブロック単位の階段」で届く。これを均すには
+    //   平滑の時定数がブロック長より長い必要があるので、ここで受け取る。
+    void prepare(double sampleRate, int maxBlockSize = 512) noexcept
     {
         sr = juce::jmax(8000.0, sampleRate);
+        blockSamples = juce::jmax(16, maxBlockSize);
         for (auto& row : filters)
             for (auto& f : row)
                 f.prepare(sr);
@@ -132,9 +137,21 @@ public:
         {
             return (float)(1.0 - std::exp(-1.0 / (juce::jmax(1.0e-5, tauSec) * tickRate)));
         };
-        liftTickCoef = tickCoef(0.00242);   // 旧 0.30 @44.1k
         modTickCoef  = tickCoef(0.00207);   // 旧 0.35 @44.1k
         cutTickCoef  = tickCoef(0.00145);   // 旧 0.50 @44.1k
+
+        // ---- LIFT (ENV評価位置) の平滑: AUTO と MANUAL で時定数を分ける ----
+        //  AUTO  : progress はサンプル単位で連続的に進むため、入力に段差が無い。
+        //          τ を伸ばすと Steps 系カーブの段差まで鈍ってしまうので、
+        //          従来どおり 2.42ms のまま速く保つ。
+        //  MANUAL: LIFT ノブ/オートメーションはブロック単位の階段で届く。
+        //          τ がブロック長より短いと段差がそのまま残りジッパーノイズになる。
+        //          (512サンプル @48kHz = 10.7ms に対し従来は 2.42ms しかなかった)
+        //          ブロック長の1.5倍を目安に伸ばして段差を埋める。
+        liftTickCoefAuto = tickCoef(0.00242);   // 旧 0.30 @44.1k 相当
+
+        const double blockSec = (double)blockSamples / sr;
+        liftTickCoefManual = tickCoef(juce::jmax(0.00242, blockSec * 1.5));
 
         // ---- ノイズ: 固定44.1kHz仮想レートでの生成 (スペクトルをSR非依存化) ----
         //  Pink(Kellett)/Brown の係数は44.1kHz設計。高SRでそのまま回すと
@@ -285,6 +302,13 @@ public:
 
     bool isNoteActive() const noexcept { return noteHeld || pendingNote || ampEnv > 1.0e-4f; }
     float getProgressF() const noexcept { return (float)progress; }
+
+    // controlTick が実際にカーブを読んだ位置 (平滑後・REVERSE適用後)。
+    //  FXチェーン側も同じ位置でカーブを評価するために公開する。
+    //  以前はFX側が「生の progress / 生の LIFTノブ値」から独自に評価位置を
+    //  組み立てていたため、MANUALで素早く動かすとオシレーターは滑らかに
+    //  追従するのにFXだけブロック単位で跳ぶ、という不一致が起きていた。
+    float getEvalPos() const noexcept { return liftSm; }
 
     std::atomic<float> uiProgress { 0.0f };
 
@@ -476,7 +500,8 @@ private:
         if (snapNext)
             liftSm = posTarget;   // ノートオン直後は評価位置も即スナップ (開始チャープ防止)
         else
-            liftSm += liftTickCoef * (posTarget - liftSm);
+            liftSm += (p.liftAuto ? liftTickCoefAuto : liftTickCoefManual)
+                    * (posTarget - liftSm);
         const float evalPos = liftSm;
 
         // バイポーラ偏差 (-1..1)。curveHint でセグメント探索を実質O(1)にする。
@@ -732,10 +757,12 @@ private:
     double pendPpq = 0.0;
     bool   pendHost = false;
 
-    // コントロールティック平滑係数 (prepare() でSRから算出)
-    float liftTickCoef = 0.30f;
+    // コントロールティック平滑係数 (prepare() でSR/ブロック長から算出)
+    float liftTickCoefAuto   = 0.30f;   // AUTO:   progress連動 (速い)
+    float liftTickCoefManual = 0.30f;   // MANUAL: ブロック長追従 (遅い)
     float modTickCoef  = 0.35f;
     float cutTickCoef  = 0.50f;
+    int   blockSamples = 512;
 
     // [フィルター][ソース] = 16基 (ソース別ルーティング用)
     std::array<std::array<TptSvf, kNumSources>, kNumFilters> filters;

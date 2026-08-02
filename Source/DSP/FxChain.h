@@ -926,7 +926,7 @@ public:
         modSmCoef = 1.0f - std::exp((float)(-1.0 / (0.010 * sr)));
         satAmtSm = satDriveSm = 0.0f;
         choAmtSm = choDepthSm = 0.0f;
-        revShimSm = 0.0f;
+        revAmtSm = revShimSm = 0.0f;
         duckAmtSm = duckShapeSm = 0.0f;
         modSmInit = false;
     }
@@ -985,7 +985,7 @@ public:
             modSmInit = true;
             satAmtSm = p.satAmt;   satDriveSm = p.satDrive;
             choAmtSm = p.choAmt;   choDepthSm = p.choDepth;
-            revShimSm = p.revShimmer;
+            revAmtSm = p.revAmt;   revShimSm = p.revShimmer;
             duckAmtSm = p.duckAmt; duckShapeSm = p.duckShape;
         }
 
@@ -1023,6 +1023,7 @@ public:
             satDriveSm  += modSmCoef * (p.satDrive - satDriveSm);
             choAmtSm    += modSmCoef * (p.choAmt - choAmtSm);
             choDepthSm  += modSmCoef * (p.choDepth - choDepthSm);
+            revAmtSm    += modSmCoef * (p.revAmt - revAmtSm);
             revShimSm   += modSmCoef * (p.revShimmer - revShimSm);
             duckAmtSm   += modSmCoef * (p.duckAmt - duckAmtSm);
             duckShapeSm += modSmCoef * (p.duckShape - duckShapeSm);
@@ -1064,7 +1065,7 @@ public:
                             delay.process(oL, oR, p.dlyAmt, p.bpm, p.dlyBeats, p.dlyFeedback, p.dlyDuck, p.dlyDamp);
                             break;
                         case Reverb:
-                            reverb.process(oL, oR, p.revAmt, p.revDecay, revShimSm, p.revDamp, p.revMod);
+                            reverb.process(oL, oR, revAmtSm, p.revDecay, revShimSm, p.revDamp, p.revMod);
                             break;
                         default: break;
                         }
@@ -1143,7 +1144,7 @@ private:
     bool  modSmInit = false;
     float satAmtSm = 0.0f, satDriveSm = 2.0f;
     float choAmtSm = 0.0f, choDepthSm = 0.5f;
-    float revShimSm = 0.4f;
+    float revAmtSm = 0.0f, revShimSm = 0.4f;
     float duckAmtSm = 0.0f, duckShapeSm = 2.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FxChain)
