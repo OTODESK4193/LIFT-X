@@ -195,96 +195,109 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced(20, 10);
+        // ---- 2カラムレイアウト ----
+        //  1カラムだと右半分が丸ごと余り、そのぶん各セクションを縦に
+        //  詰める必要があってノブが潰れていた。左右に分けて縦の余裕を作る。
+        auto r = getLocalBounds().reduced(18, 12);
         r.removeFromTop(16);
 
-        // ---- スケール量子化セクション ----
-        scaleArea = r.removeFromTop(142);
+        auto leftCol  = r.removeFromLeft((int)(r.getWidth() * 0.56f));
+        r.removeFromLeft(24);
+        auto rightCol = r;
+
+        // ================= 左: スケール量子化 =================
+        scaleArea = leftCol.removeFromTop(196);
         {
             auto sc = scaleArea.reduced(14, 12);
 
-            auto row1 = sc.removeFromTop(26);
-            scaleOn->setBounds(row1.removeFromLeft(190));
+            scaleOn->setBounds(sc.removeFromTop(26).removeFromLeft(190));
             sc.removeFromTop(10);
 
             auto row2 = sc.removeFromTop(46);
-            auto keyCol = row2.removeFromLeft(90);
+            auto keyCol = row2.removeFromLeft(86);
             keyLabel.setBounds(keyCol.removeFromTop(16));
-            keyBox.setBounds(keyCol.removeFromTop(26).reduced(0, 0).withTrimmedRight(10));
+            keyBox.setBounds(keyCol.removeFromTop(26).withTrimmedRight(10));
 
-            auto scaleCol = row2.removeFromLeft(240);
+            auto scaleCol = row2;
             scaleLabel.setBounds(scaleCol.removeFromTop(16));
             scaleBox.setBounds(scaleCol.removeFromTop(26).withTrimmedRight(10));
 
-            auto applyCol = row2;
-            oscApplyLabel.setBounds(applyCol.removeFromTop(16));
-            auto tRow = applyCol.removeFromTop(26);
+            sc.removeFromTop(6);
+            auto applyRow = sc.removeFromTop(42);
+            oscApplyLabel.setBounds(applyRow.removeFromTop(16));
+            auto tRow = applyRow.removeFromTop(26);
             for (int i = 0; i < RiserEngine::kNumOscs; ++i)
             {
-                oscScale[(size_t)i]->setBounds(tRow.removeFromLeft(78));
+                oscScale[(size_t)i]->setBounds(tRow.removeFromLeft(84));
                 tRow.removeFromLeft(6);
             }
 
-            sc.removeFromTop(6);
+            sc.removeFromTop(4);
             scaleInfo.setBounds(sc);
         }
 
-        r.removeFromTop(16);
+        leftCol.removeFromTop(28);
 
-        // ---- KEY FOLLOW / VELOCITY セクション ----
-        playArea = r.removeFromTop(116);
+        // ================= 左: KEY FOLLOW / VELOCITY =================
+        playArea = leftCol.removeFromTop(206);
         {
             auto pa = playArea.reduced(14, 12);
 
-            auto row = pa.removeFromTop(46);
-            auto kfCol = row.removeFromLeft(180);
-            keyFollowLabel.setBounds(kfCol.removeFromTop(16));
-            keyFollowBox.setBounds(kfCol.removeFromTop(26).withTrimmedRight(10));
+            auto kfRow = pa.removeFromTop(44);
+            keyFollowLabel.setBounds(kfRow.removeFromTop(16));
+            keyFollowBox.setBounds(kfRow.removeFromTop(26).removeFromLeft(190));
 
-            struct VC { ValueKnob* k; juce::Label* l; };
-            const VC vs[3] = { { &velCutKnob, &velCutLabel },
-                               { &velNoiseKnob, &velNoiseLabel },
-                               { &velDriveKnob, &velDriveLabel } };
-            for (const auto& v : vs)
+            pa.removeFromTop(6);
+            auto velRow = pa.removeFromTop(96);
+            ValueKnob* vk[3] = { &velCutKnob, &velNoiseKnob, &velDriveKnob };
+            juce::Label* vl[3] = { &velCutLabel, &velNoiseLabel, &velDriveLabel };
+            const int vw = velRow.getWidth() / 3;
+            for (int i = 0; i < 3; ++i)
             {
-                auto c = row.removeFromLeft(112);
-                v.l->setBounds(c.removeFromTop(16));
-                v.k->setBounds(c.reduced(6, 0));
+                auto c = velRow.removeFromLeft(vw);
+                vl[i]->setBounds(c.removeFromTop(16));
+                vk[i]->setBounds(c.reduced(6, 0));
             }
 
-            pa.removeFromTop(50);
+            pa.removeFromTop(6);
             playInfo.setBounds(pa);
         }
 
-        r.removeFromTop(16);
+        // ================= 右: マスターリミッター =================
+        limArea = rightCol.removeFromTop(196);
+        {
+            auto lim = limArea.reduced(14, 12);
+            limOn->setBounds(lim.removeFromTop(26).removeFromLeft(150));
+            lim.removeFromTop(10);
 
-        // リミッターセクション
-        limArea = r.removeFromTop(118);
-        auto lim = limArea.reduced(14, 12);
-        limOn->setBounds(lim.removeFromTop(26).removeFromLeft(150));
-        lim.removeFromTop(8);
-        auto knobRow = lim.removeFromTop(84);
-        auto c1 = knobRow.removeFromLeft(110);
-        ceilLabel.setBounds(c1.removeFromTop(16));
-        ceilKnob.setBounds(c1.reduced(4));
-        auto c2 = knobRow.removeFromLeft(110);
-        relLabel.setBounds(c2.removeFromTop(16));
-        relKnob.setBounds(c2.reduced(4));
-        limInfo.setBounds(knobRow.reduced(8, 30));
+            auto knobRow = lim.removeFromTop(104);
+            auto c1 = knobRow.removeFromLeft(118);
+            ceilLabel.setBounds(c1.removeFromTop(16));
+            ceilKnob.setBounds(c1.reduced(6, 0));
+            auto c2 = knobRow.removeFromLeft(118);
+            relLabel.setBounds(c2.removeFromTop(16));
+            relKnob.setBounds(c2.reduced(6, 0));
 
-        r.removeFromTop(16);
+            lim.removeFromTop(6);
+            limInfo.setBounds(lim);
+        }
 
-        // テーマセクション
-        themeArea = r.removeFromTop(84);
-        auto th = themeArea.reduced(14, 10);
-        themeLabel.setBounds(th.removeFromTop(18));
-        th.removeFromTop(4);
-        themeBox.setBounds(th.removeFromTop(26).removeFromLeft(220));
-        th.removeFromTop(6);
-        themeBanner.setBounds(th.removeFromTop(20));
+        rightCol.removeFromTop(28);
 
-        r.removeFromTop(10);
-        verInfo.setBounds(r.removeFromTop(20));
+        // ================= 右: 外観 =================
+        themeArea = rightCol.removeFromTop(104);
+        {
+            auto th = themeArea.reduced(14, 10);
+            themeLabel.setBounds(th.removeFromTop(18));
+            th.removeFromTop(4);
+            themeBox.setBounds(th.removeFromTop(26).removeFromLeft(220));
+            th.removeFromTop(6);
+            themeBanner.setBounds(th.removeFromTop(20));
+        }
+
+        rightCol.removeFromTop(14);
+        verInfo.setBounds(rightCol.removeFromTop(20));
+
     }
 
 private:

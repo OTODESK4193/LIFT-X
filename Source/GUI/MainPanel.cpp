@@ -316,7 +316,7 @@ void MainPanel::setupKnob(KnobCell& c, const juce::String& text, const juce::Str
                           int accentId)
 {
     c.knob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-    c.knob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 15);
+    c.knob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 14);
     c.knob.setColour(juce::Slider::rotarySliderFillColourId, LiftColors::accentById(accentId));
     c.knob.getProperties().set("accentId", accentId); // テーマ変更へライブ連動
     addAndMakeVisible(c.knob);
@@ -354,7 +354,7 @@ void MainPanel::layoutKnobGrid(juce::Rectangle<int> area, KnobCell** cells, int 
         const int cy = area.getY() + (i / cols) * ch;
         juce::Rectangle<int> cell(cx, cy, cw, ch);
 
-        cells[i]->label.setBounds(cell.removeFromTop(16));
+        cells[i]->label.setBounds(cell.removeFromTop(14));
         cells[i]->knob.setBounds(cell.reduced(2));
     }
 }
@@ -364,10 +364,10 @@ void MainPanel::paint(juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
 
-    LiftColors::paintPanel(g, r.removeFromTop(150.0f).reduced(2.0f));
+    LiftColors::paintPanel(g, r.removeFromTop(132.0f).reduced(2.0f));
     LiftColors::paintPanel(g, r.reduced(2.0f).withTrimmedTop(4.0f));
 
-    const auto cols = getLocalBounds().withTrimmedTop(158);
+    const auto cols = getLocalBounds().withTrimmedTop(140);
     g.setColour(LiftColors::panelLine);
     for (int i = 1; i < 4; ++i)
     {
@@ -381,7 +381,7 @@ void MainPanel::resized()
     auto r = getLocalBounds();
 
     // ---- 上段: グローバル ----
-    auto top = r.removeFromTop(150).reduced(10, 6);
+    auto top = r.removeFromTop(132).reduced(10, 6);
 
     {
         auto liftArea = top.removeFromLeft(140);
@@ -432,7 +432,7 @@ void MainPanel::resized()
         col.removeFromTop(4);
         waveBox[(size_t)i].setBounds(col.removeFromTop(22));
         col.removeFromTop(4);
-        waveDisp[(size_t)i].setBounds(col.removeFromTop(40));
+        waveDisp[(size_t)i].setBounds(col.removeFromTop(34));
         col.removeFromTop(4);
 
         auto browseRow = col.removeFromTop(20);
@@ -457,7 +457,7 @@ void MainPanel::resized()
                                &oscCoarse[(size_t)i], &oscFine[(size_t)i],
                                &oscUni[(size_t)i],    &oscDet[(size_t)i],
                                &oscSpread[(size_t)i], nullptr };
-        layoutKnobGrid(col, cells, 7, 2);
+        layoutKnobGrid(col, cells, 7, 3);
     }
 
     // ノイズ列 + マスターエリア

@@ -198,7 +198,8 @@ namespace LiftColors
         // OSC1-3 (0-11): Pitch系はlavender / モジュレーション系もソース色で統一
         if (idx < 12) return (idx % 4 == 0) ? lavender : mint;
         if (idx < 15) return lilac;                    // ノイズ
-        if (idx < 19) return babyBlue;                 // フィルター
-        return peach;                                  // FX
+        if (idx < 23) return babyBlue;                 // フィルター (Cutoff/Res)
+        if (idx < 35) return peach;                    // FX
+        return rose;                                   // PAN
     }
 }

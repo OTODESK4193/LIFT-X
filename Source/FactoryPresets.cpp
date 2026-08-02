@@ -588,7 +588,8 @@ static_assert(CurveStore::ChoAmt     == 25, "FactoryPresets: curve index layout 
 static_assert(CurveStore::DlyAmt     == 27, "FactoryPresets: curve index layout changed");
 static_assert(CurveStore::RevAmt     == 30, "FactoryPresets: curve index layout changed");
 static_assert(CurveStore::DuckAmt    == 32, "FactoryPresets: curve index layout changed");
-static_assert(CurveStore::kNumCurves == 35, "FactoryPresets: curve count changed");
+static_assert(CurveStore::Osc1Pan    == 35, "FactoryPresets: curve index layout changed");
+static_assert(CurveStore::kNumCurves == 39, "FactoryPresets: curve count changed");
 
 static void applyCurves(LiftXAudioProcessor& proc, const juce::String& s)
 {

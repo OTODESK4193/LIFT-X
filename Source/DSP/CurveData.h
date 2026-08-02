@@ -219,8 +219,18 @@ public:
         DlyAmt, DlyFb, DlyTime,
         RevAmt, RevShimmer,
         DuckAmt, DuckRate, DuckShape,
-        kNumCurves // = 35
+        // ---- v0.6 追加: PAN ENV (必ず末尾へ追加すること) ----
+        //  中央=センター / 上=右 / 下=左。ソース毎に定位を動かせるため
+        //  「左から右へ駆け上がる」立体的なライザーが作れる。
+        Osc1Pan = 35, Osc2Pan, Osc3Pan, NoisePan,
+        kNumCurves // = 39
     };
+
+    // ソース(0-2=OSC1-3, 3=Noise) → PANカーブ番号
+    static int panCurve(int src) noexcept
+    {
+        return Osc1Pan + juce::jlimit(0, 3, src);
+    }
 
     // OSCソース(0-2) × ターゲット(0=Pitch 1=Level 2=Detune 3=Spread)
     static int oscCurve(int osc, int target) noexcept
@@ -246,7 +256,8 @@ public:
             "CHORUS AMT", "CHORUS DEPTH",
             "DELAY AMT", "DELAY FB", "DELAY TIME",
             "REVERB AMT", "REVERB SHIMMER",
-            "DUCK AMT", "DUCK RATE", "DUCK SHAPE" };
+            "DUCK AMT", "DUCK RATE", "DUCK SHAPE",
+            "OSC1 PAN", "OSC2 PAN", "OSC3 PAN", "NOISE PAN" };
         return names[juce::jlimit(0, kNumCurves - 1, idx)];
     }
 

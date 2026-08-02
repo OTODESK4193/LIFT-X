@@ -201,6 +201,8 @@ public:
         levelSm.fill(0.0f);
         pitchTarget.fill(60.0f);
         levelTarget.fill(0.0f);
+        panTarget.fill(0.0f);
+        panSm.fill(0.0f);
         posSm.fill(0.0f);
         detSm.fill(12.0f);
         sprSm.fill(0.7f);
@@ -494,10 +496,19 @@ public:
             }
 
             const float g = ampEnv * velGain * declickGain;
+
+            // ---- PAN ENV (ソース毎の定位) ----
+            //  等パワー則で L/R ゲインを掛ける。中央のときは 0.7071 で
+            //  両チャンネル同一になり、PANカーブ未使用時の音量とも整合する。
             for (int s = 0; s < kNumSources; ++s)
             {
-                busL[s][i] += srcL[(size_t)s] * g;
-                busR[s][i] += srcR[(size_t)s] * g;
+                panSm[(size_t)s] += smCoef * (panTarget[(size_t)s] - panSm[(size_t)s]);
+                const float th = (panSm[(size_t)s] * 0.5f + 0.5f) * juce::MathConstants<float>::halfPi;
+                const float pl = std::cos(th) * juce::MathConstants<float>::sqrt2;
+                const float pr = std::sin(th) * juce::MathConstants<float>::sqrt2;
+
+                busL[s][i] += srcL[(size_t)s] * g * pl * 0.70710678f;
+                busR[s][i] += srcR[(size_t)s] * g * pr * 0.70710678f;
             }
         }
 
@@ -625,6 +636,10 @@ private:
             }
         }
 
+        // ---- PAN ENV: 全ソースの定位 (-1=L .. 0=中央 .. +1=R) ----
+        for (int s = 0; s < kNumSources; ++s)
+            panTarget[(size_t)s] = juce::jlimit(-1.0f, 1.0f, bip(CurveStore::panCurve(s)));
+
         // ノイズ: PITCH (バイポーラoct) / LEVEL / RES
         {
             // 20Hz..Nyquist手前へクランプ (平滑器が極端な値を保持しないように)
@@ -694,6 +709,7 @@ private:
             snapNext = false;
             pitchSm = pitchTarget;
             levelSm = levelTarget;
+            panSm   = panTarget;
             for (int o = 0; o < kNumOscs; ++o)
                 posSm[(size_t)o] = p.osc[(size_t)o].pos;
         }
@@ -776,6 +792,9 @@ private:
     std::array<bool,  kNumOscs> pitchQuant { false, false, false };
     std::array<float, kNumSources> levelTarget {};
     std::array<float, kNumSources> levelSm {};
+    // PAN ENV (-1=L .. +1=R)。サンプル単位平滑で定位移動のジッパーを防ぐ
+    std::array<float, kNumSources> panTarget {};
+    std::array<float, kNumSources> panSm {};
     std::array<float, kNumOscs> posSm {};
     std::array<float, kNumOscs> detSm {};
     std::array<float, kNumOscs> sprSm {};
