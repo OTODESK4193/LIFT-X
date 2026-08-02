@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Solution>
+	<Configurations>
+		<BuildType Name="Debug"/>
+		<BuildType Name="Release"/>
+		<BuildType Name="MinSizeRel"/>
+		<BuildType Name="RelWithDebInfo"/>
+		<Platform Name="x64"/>
+	</Configurations>
+	<Project Path="LIFTX_rc_lib.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="57ca6bdc-412c-3d92-874e-2fb188cf666f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Folder Name="/CMakePredefinedTargets/">
+		<Project Path="ALL_BUILD.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e4fe3b83-8a8c-312f-90d8-c7fef505bac5" DefaultStartup="true">
+			<BuildDependency Project="LIFTX.vcxproj"/>
+			<BuildDependency Project="LIFTX_Standalone.vcxproj"/>
+			<BuildDependency Project="LIFTX_VST3.vcxproj"/>
+			<BuildDependency Project="LIFTX_rc_lib.vcxproj"/>
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		</Project>
+		<Project Path="INSTALL.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="0a6b1555-f7a8-35fc-8544-2ae777cf3742">
+			<BuildDependency Project="ALL_BUILD.vcxproj"/>
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+			<Build Solution="Debug|*" Project="false"/>
+			<Build Solution="Release|*" Project="false"/>
+			<Build Solution="MinSizeRel|*" Project="false"/>
+			<Build Solution="RelWithDebInfo|*" Project="false"/>
+		</Project>
+		<Project Path="ZERO_CHECK.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="0e4b9a65-8559-3fb6-ad89-e2e18490a1f5"/>
+	</Folder>
+	<Folder Name="/LIFTX/">
+		<Project Path="LIFTX.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="c98672b9-dd07-3216-a0a2-d3f7d40a21c7">
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		</Project>
+		<Project Path="LIFTX_All.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5f64b79a-605e-375f-86f3-8f30a51e2db8">
+			<BuildDependency Project="LIFTX_Standalone.vcxproj"/>
+			<BuildDependency Project="LIFTX_VST3.vcxproj"/>
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+			<Build Solution="Debug|*" Project="false"/>
+			<Build Solution="Release|*" Project="false"/>
+			<Build Solution="MinSizeRel|*" Project="false"/>
+			<Build Solution="RelWithDebInfo|*" Project="false"/>
+		</Project>
+		<Project Path="LIFTX_Standalone.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="9544d6df-15f0-345f-aec4-412a7760f4ad">
+			<BuildDependency Project="LIFTX.vcxproj"/>
+			<BuildDependency Project="LIFTX_rc_lib.vcxproj"/>
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		</Project>
+		<Project Path="LIFTX_VST3.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="a817d3a7-f9ba-3d66-b848-0d83d8be8f75">
+			<BuildDependency Project="LIFTX.vcxproj"/>
+			<BuildDependency Project="LIFTX_rc_lib.vcxproj"/>
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		</Project>
+	</Folder>
+</Solution>

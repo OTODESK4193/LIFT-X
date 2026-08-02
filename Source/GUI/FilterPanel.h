@@ -10,6 +10,7 @@
 
 #include "../PluginProcessor.h"
 #include "CurveEditor.h"
+#include "FilterResponseDisplay.h"
 #include "ValueKnob.h"
 #include "GlowToggle.h"
 #include "ModBand.h"
@@ -37,6 +38,7 @@ private:
     int activeSub = 0;
 
     CurveEditor editor;
+    FilterResponseDisplay responseDisplay;
 
     // 選択中フィルターのコントロール (サブタブ切替時にアタッチメント再接続)
     std::unique_ptr<GlowToggle> onToggle;

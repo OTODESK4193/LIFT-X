@@ -21,6 +21,8 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
         proc.getCurves().publish(CurveStore::Filter1 + activeSub, s);
     };
 
+    addAndMakeVisible(responseDisplay);
+
     onToggle = std::make_unique<GlowToggle>("ENABLE", LiftColors::accentFilter);
     addAndMakeVisible(*onToggle);
 
@@ -66,7 +68,7 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     hint.setFont(juce::Font(juce::FontOptions(12.0f)));
     hint.setColour(juce::Label::textColourId, LiftColors::textDim);
     hint.setJustificationType(juce::Justification::centredLeft);
-    hint.setText("Curve x ENV AMT sweeps CUTOFF across the full range "
+    hint.setText("Curve x ENV AMT sweeps CUTOFF across full range "
                  "(ZDF/TPT: stable even under fast sweeps)",
                  juce::dontSendNotification);
     addAndMakeVisible(hint);
@@ -75,7 +77,7 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     startTimerHz(30);
 }
 
-// マルチENV変化幅をCUTOFFノブへ動的表示 (±5oct × ENV AMT)
+// マルチENV変化幅をCUTOFFノブへ動的表示および応答曲線更新
 void FilterPanel::timerCallback()
 {
     if (!isVisible()) return;
@@ -83,13 +85,34 @@ void FilterPanel::timerCallback()
     const juce::String n(activeSub + 1);
     auto* prm = proc.apvts.getParameter("flt" + n + "Cutoff");
     const float envAmt = proc.apvts.getRawParameterValue("flt" + n + "Env")->load();
+    const bool onState = proc.apvts.getRawParameterValue("flt" + n + "On")->load() > 0.5f;
+    const int typeState = (int)proc.apvts.getRawParameterValue("flt" + n + "Type")->load();
+    const float cutoffVal = proc.apvts.getRawParameterValue("flt" + n + "Cutoff")->load();
+    const float resVal = proc.apvts.getRawParameterValue("flt" + n + "Res")->load();
 
     // ENV評価位置: Auto=Progress / Manual=LIFTノブ
     const float envPos = proc.getEnvPosition();
+    const float bipVal = (proc.getCurves().read(CurveStore::Filter1 + activeSub).evaluate(envPos) - 0.5f) * 2.0f;
+    const float modAmount = juce::jlimit(-1.0f, 1.0f, envAmt * bipVal);
+
+    const float maxHz = 20000.0f;
+    const float baseHz = juce::jlimit(20.0f, maxHz, cutoffVal);
+    const float logCut = std::log2(baseHz);
+    const float logTarget = modAmount >= 0.0f ? logCut + modAmount * (std::log2(maxHz) - logCut)
+                                               : logCut + modAmount * (logCut - std::log2(20.0f));
+    const float liveCutoffHz = juce::jlimit(20.0f, maxHz, std::exp2(logTarget));
+
+    responseDisplay.setParams(typeState, cutoffVal, resVal, liveCutoffHz, onState);
 
     ModBand::update(cutoffKnob, prm,
                     proc.getCurves().read(CurveStore::Filter1 + activeSub), 1.0f, envPos,
-                    [envAmt](float b, float bip) { return b * std::exp2(envAmt * bip * 10.0f); });
+                    [envAmt](float b, float bip) {
+                        const float mAmt = juce::jlimit(-1.0f, 1.0f, envAmt * bip);
+                        const float lCut = std::log2(juce::jlimit(20.0f, 20000.0f, b));
+                        const float lTgt = mAmt >= 0.0f ? lCut + mAmt * (std::log2(20000.0f) - lCut)
+                                                        : lCut + mAmt * (lCut - std::log2(20.0f));
+                        return juce::jlimit(20.0f, 20000.0f, std::exp2(lTgt));
+                    });
 }
 
 void FilterPanel::setSub(int idx)
@@ -151,7 +174,7 @@ void FilterPanel::resized()
 {
     auto r = getLocalBounds().reduced(12, 10);
 
-    // サブタブ行
+    // サブタブ行 (FLT 1 ~ FLT 4)
     auto top = r.removeFromTop(30);
     for (int i = 0; i < 4; ++i)
     {
@@ -159,27 +182,13 @@ void FilterPanel::resized()
         top.removeFromLeft(6);
     }
 
-    // 右側: 選択中フィルターのコントロール
-    auto rightCol = r.removeFromRight(120).reduced(4);
-    onToggle->setBounds(rightCol.removeFromTop(26));
-    rightCol.removeFromTop(6);
-    typeLabel.setBounds(rightCol.removeFromTop(14));
-    typeBox.setBounds(rightCol.removeFromTop(24));
-    rightCol.removeFromTop(6);
+    r.removeFromTop(4);
 
-    auto knobCell = [&rightCol](juce::Label& l, ValueKnob& k)
-    {
-        l.setBounds(rightCol.removeFromTop(14));
-        k.setBounds(rightCol.removeFromTop(96).reduced(6));
-        rightCol.removeFromTop(2);
-    };
-    knobCell(cutoffLabel, cutoffKnob);
-    knobCell(resLabel, resKnob);
-    knobCell(envLabel, envKnob);
+    // ヒント行
+    hint.setBounds(r.removeFromBottom(18));
+    r.removeFromBottom(4);
 
-    r.removeFromTop(6);
-
-    // ルーティング行 (点灯=このフィルターを通る)
+    // ルーティング行
     auto routeRow = r.removeFromTop(24);
     routeLabel.setBounds(routeRow.removeFromLeft(64));
     for (int s = 0; s < 4; ++s)
@@ -189,7 +198,48 @@ void FilterPanel::resized()
     }
 
     r.removeFromTop(6);
-    hint.setBounds(r.removeFromBottom(18));
-    r.removeFromBottom(4);
-    editor.setBounds(r);
+
+    // メイン領域分割: 左2/3をEnv画面(editor)、右1/3をフィルターコントロール(responseDisplay + ノブ群)
+    int totalWidth = r.getWidth();
+    int rightWidth = totalWidth / 3;  // 右1/3
+    int leftWidth = totalWidth - rightWidth - 8; // 左2/3
+
+    auto leftArea = r.removeFromLeft(leftWidth);
+    r.removeFromLeft(8);
+    auto rightArea = r;
+
+    // 左2/3: Env画面
+    editor.setBounds(leftArea);
+
+    // 右1/3: 上半分にFilterカーブ描画 (FilterResponseDisplay), 下半分にノブ群
+    int responseHeight = rightArea.getHeight() * 4 / 10; // 上部 40%
+    responseDisplay.setBounds(rightArea.removeFromTop(responseHeight));
+    rightArea.removeFromTop(6);
+
+    // 右1/3の下半分: ENABLE / TYPE 行 と 3個のノブ (CUTOFF / RES / ENV AMT)
+    auto enableTypeRow = rightArea.removeFromTop(26);
+    onToggle->setBounds(enableTypeRow.removeFromLeft(80));
+    enableTypeRow.removeFromLeft(6);
+    typeLabel.setBounds(enableTypeRow.removeFromLeft(40));
+    typeComboArea:
+    typeBox.setBounds(enableTypeRow);
+
+    rightArea.removeFromTop(6);
+
+    // ノブ3個を横に均等配置
+    int knobWidth = (rightArea.getWidth() - 12) / 3;
+    
+    auto kCell1 = rightArea.removeFromLeft(knobWidth);
+    rightArea.removeFromLeft(6);
+    cutoffLabel.setBounds(kCell1.removeFromTop(14));
+    cutoffKnob.setBounds(kCell1);
+
+    auto kCell2 = rightArea.removeFromLeft(knobWidth);
+    rightArea.removeFromLeft(6);
+    resLabel.setBounds(kCell2.removeFromTop(14));
+    resKnob.setBounds(kCell2);
+
+    auto kCell3 = rightArea;
+    envLabel.setBounds(kCell3.removeFromTop(14));
+    envKnob.setBounds(kCell3);
 }
