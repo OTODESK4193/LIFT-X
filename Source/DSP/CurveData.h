@@ -53,7 +53,13 @@ struct CurveSnapshot
     }
 
     // x(0..1) におけるカーブ値 y(0..1)。RT安全 (線形走査・分岐のみ)。
-    float evaluate(float x) const noexcept
+    //
+    //  hint: 前回ヒットしたセグメント番号を渡すと、そこから探索を始める。
+    //   評価位置 (Progress / LIFT) は連続的にしか動かないため、ほぼ必ず
+    //   同じセグメントか隣接セグメントでヒットし、実質 O(1) になる。
+    //   Steps32 等の 65点カーブでは線形走査が平均32回まで伸びるため効果が大きい。
+    //   nullptr を渡せば従来どおり先頭から走査する (GUI描画はこちら)。
+    float evaluate(float x, int* hint = nullptr) const noexcept
     {
         if (numPoints <= 0) return 0.5f;
         if (numPoints == 1) return pts[0].y;
@@ -61,17 +67,31 @@ struct CurveSnapshot
         x = juce::jlimit(0.0f, 1.0f, x);
         if (x <= pts[0].x) return pts[0].y;
 
-        for (int i = 0; i < numPoints - 1; ++i)
+        const int nSeg = numPoints - 1;
+
+        // ヒントの妥当性を検証してから使う (カーブ差し替え直後は範囲外になりうる)
+        int i = 0;
+        if (hint != nullptr)
+        {
+            i = *hint;
+            if (i < 0 || i >= nSeg) i = 0;
+            // ヒント位置より手前なら後退、そうでなければヒント位置から前進
+            else if (x <= pts[(size_t)i].x) i = 0;
+        }
+
+        for (; i < nSeg; ++i)
         {
             const auto& p0 = pts[(size_t)i];
             const auto& p1 = pts[(size_t)i + 1];
             if (x <= p1.x)
             {
+                if (hint != nullptr) *hint = i;
                 const float w = p1.x - p0.x;
                 const float t = (w > 1.0e-6f) ? (x - p0.x) / w : 1.0f;
                 return p0.y + (p1.y - p0.y) * shape(t, p0.curve);
             }
         }
+        if (hint != nullptr) *hint = nSeg - 1;
         return pts[(size_t)numPoints - 1].y;
     }
 

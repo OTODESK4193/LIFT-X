@@ -9,7 +9,12 @@
 //    scaleIndex: パラメーター "scaleType" のインデックスと1:1対応
 //
 //  設計:
-//   - 度数テーブルは constexpr POD。quantize() は割り当て・分岐のみで RT安全。
+//   - 度数テーブルは名前空間スコープの inline constexpr 配列。
+//     以前は関数ローカル static (magic static) だったため、オーディオスレッドから
+//     呼ばれるたびにガード変数の atomic ロードが入り、さらに「初回呼び出しが
+//     オーディオスレッドだった場合に初期化ロックを取る」というRT上の穴があった。
+//     inline constexpr にすることで、ガードも初期化も完全に消える。
+//   - quantize() は割り当て・分岐のみで RT安全。
 //   - 隣接オクターブも含めた最短距離でスナップするため、スケール端でも
 //     不自然な折り返しが起きない。
 //   - Granular の 16種 (Free を除く) を先頭に配置し、全70種へ拡張。
@@ -35,9 +40,7 @@ namespace ScaleQuantizer
     // 順序を変えると既存プリセット/セッションのスケール指定がズレるため、
     // 追加は必ず末尾に行うこと。
     // ------------------------------------------------------------
-    inline const std::array<ScaleDef, 70>& getScales()
-    {
-        static const std::array<ScaleDef, 70> scales = { {
+    inline constexpr std::array<ScaleDef, 70> kScales = { {
             // ---- 基本 (Granular 互換) ----
             { "Chromatic",         12, { 0,1,2,3,4,5,6,7,8,9,10,11 } },
             { "Major (Ionian)",     7, { 0,2,4,5,7,9,11 } },
@@ -115,25 +118,26 @@ namespace ScaleQuantizer
             { "Minor 9th",          5, { 0,2,3,7,10 } },
             { "Major 9th",          5, { 0,2,4,7,11 } },
             { "Octaves Only",       1, { 0 } },
-        } };
-        return scales;
-    }
+    } };
 
-    inline int numScales() noexcept { return (int)getScales().size(); }
+    // 既存コードとの互換用アクセサ (GUI/パラメーターレイアウトから使われる)
+    inline const std::array<ScaleDef, 70>& getScales() noexcept { return kScales; }
 
-    inline const char* scaleName(int idx) noexcept
+    inline constexpr int numScales() noexcept { return (int)kScales.size(); }
+
+    inline constexpr const char* scaleName(int idx) noexcept
     {
-        const auto& s = getScales();
-        if (idx < 0 || idx >= (int)s.size()) return "Chromatic";
-        return s[(size_t)idx].name;
+        if (idx < 0 || idx >= (int)kScales.size()) return "Chromatic";
+        return kScales[(size_t)idx].name;
     }
 
     // ルート名 (0..11)
-    inline const char* keyName(int root) noexcept
+    inline constexpr std::array<const char*, 12> kKeyNames =
+        { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+
+    inline constexpr const char* keyName(int root) noexcept
     {
-        static const char* names[12] = { "C", "C#", "D", "D#", "E", "F",
-                                         "F#", "G", "G#", "A", "A#", "B" };
-        return names[((root % 12) + 12) % 12];
+        return kKeyNames[(size_t)(((root % 12) + 12) % 12)];
     }
 
     // ------------------------------------------------------------
@@ -142,11 +146,10 @@ namespace ScaleQuantizer
     // ------------------------------------------------------------
     inline float quantize(float absSemis, int rootNote, int scaleIndex) noexcept
     {
-        const auto& scales = getScales();
-        if (scaleIndex < 0 || scaleIndex >= (int)scales.size())
+        if (scaleIndex < 0 || scaleIndex >= (int)kScales.size())
             return absSemis;
 
-        const auto& s = scales[(size_t)scaleIndex];
+        const auto& s = kScales[(size_t)scaleIndex];
         if (s.size <= 0)
             return absSemis;
 

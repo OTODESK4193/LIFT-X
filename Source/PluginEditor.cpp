@@ -31,8 +31,8 @@ LiftXAudioProcessorEditor::LiftXAudioProcessorEditor(LiftXAudioProcessor& p)
     addAndMakeVisible(prevPresetButton);
     addAndMakeVisible(nextPresetButton);
     addAndMakeVisible(presetNameLabel);
-    prevPresetButton.onClick = [this] { proc.stepPreset(-1); timerCallback(); };
-    nextPresetButton.onClick = [this] { proc.stepPreset(1); timerCallback(); };
+    prevPresetButton.onClick = [this] { proc.stepPreset(-1); refreshAfterPresetChange(); };
+    nextPresetButton.onClick = [this] { proc.stepPreset(1);  refreshAfterPresetChange(); };
     presetNameLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
     presetNameLabel.setColour(juce::Label::textColourId, LiftColors::text);
     presetNameLabel.setJustificationType(juce::Justification::centred);
@@ -64,6 +64,23 @@ void LiftXAudioProcessorEditor::timerCallback()
     if (name.isEmpty()) name = "-";
     if (presetNameLabel.getText() != name)
         presetNameLabel.setText(name, juce::dontSendNotification);
+}
+
+// ==========================================================
+// プリセットが「タブ操作以外の経路」で切り替わったときの再同期。
+//  ヘッダーの ◀ ▶ はタブを切り替えないため、これを呼ばないと
+//   ・PRESETタブのリストのハイライトが古いまま
+//   ・OSC ENV / FILTER / FX のカーブエディタが前のプリセットのカーブを表示したまま
+//  になる。カーブは CurveStore が真実の源なので、各パネルに読み直させる。
+//  (MAINタブは30Hzタイマーが波形表示とキー表示を自動で追従させるため対象外)
+// ==========================================================
+void LiftXAudioProcessorEditor::refreshAfterPresetChange()
+{
+    oscEnvPanel.refresh();
+    filterPanel.refresh();
+    fxPanel.refresh();
+    presetPanel.refresh();
+    timerCallback();          // ヘッダーのプリセット名
 }
 
 void LiftXAudioProcessorEditor::setActiveTab(Tab t)

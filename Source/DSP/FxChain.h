@@ -256,14 +256,36 @@ namespace lfx
                 lfos[(size_t)i].setFrequency(0.5f * LFO_RATIOS[i], (float)sr);
                 lfos[(size_t)i].setPhase((float)i / (float)NUM_CHANNELS);
             }
+
+            // wet量平滑の時定数を実時間で固定 (τ≒20ms) してSR非依存にする
+            amtCoef = (float)(1.0 - std::exp(-1.0 / (0.020 * sr)));
+            fullyCleared = true;   // prepare直後は全バッファが 0
+            clearCh = 0;
+            clearIdx = 0;
         }
 
         void process(float& inOutL, float& inOutR, float amount,
                      float decay, float shimmer, float damp, float mod) noexcept
         {
-            // wet量スムージング (急な変調復帰時のFDN蓄積解放バースト防止)
-            curAmount += 0.008f * (amount - curAmount);
-            if (amount <= 0.0f && curAmount < 1.0e-4f) return;
+            // wet量スムージング (急な変調復帰時のFDN蓄積解放バースト防止)。
+            //  係数は prepareToPlay で SR から算出する (旧実装は 0.008f 固定で、
+            //  192kHz では 44.1kHz の 4.35倍速い平滑になっていた)。
+            curAmount += amtCoef * (amount - curAmount);
+
+            if (amount <= 0.0f && curAmount < 1.0e-4f)
+            {
+                // 完全に切れている間は FDN を回さない。ただし単に return すると
+                // 遅延バッファに古い残響が残ったままになり、AMT を戻した瞬間に
+                // それが蘇ってしまう。ここで少しずつゼロクリアしておく。
+                // (一度に memset すると数MBになりブロックを踏み外すため分割する)
+                if (!fullyCleared) clearStep();
+                return;
+            }
+            // 再びアクティブになったのでクリア進捗をリセット
+            fullyCleared = false;
+            clearCh = 0;
+            clearIdx = 0;
+
             amount = curAmount;
 
             velvetL.setAmount(amount * 0.8f);
@@ -349,6 +371,47 @@ namespace lfx
             inOutL = inOutL * (1.0f - amount) + softClipOutput(sumL) * amount * 1.2f;
             inOutR = inOutR * (1.0f - amount) + softClipOutput(sumR) * amount * 1.2f;
         }
+
+    private:
+        // FDN遅延バッファの分割ゼロクリア。
+        //  リバーブが完全にOFFのあいだ、1呼び出しあたり kChunk サンプルずつ消す。
+        //  44.1kHz で全16ch (計約1.4Mサンプル) を約0.5秒かけて掃除し終える。
+        //  掃除中も出力には一切影響しない (どのみち無音のため)。
+        //  ※ Velvet/OctaveShifter はフィードバックを持たない前段なので、
+        //    古い内容が残っていても数十msで自然に流れ出る。クリア対象外でよい。
+        void clearStep() noexcept
+        {
+            constexpr int kChunk = 64;
+
+            if (clearCh == 0 && clearIdx == 0)
+            {
+                dampStates.fill(0.0f);
+                dcX1.fill(0.0f);
+                dcY1.fill(0.0f);
+            }
+
+            if (clearCh >= NUM_CHANNELS) { fullyCleared = true; return; }
+
+            auto& buf = delayBuffers[(size_t)clearCh];
+            const int n = (int)buf.size();
+            if (n <= 0) { ++clearCh; return; }
+
+            const int end = juce::jmin(n, clearIdx + kChunk);
+            for (int i = clearIdx; i < end; ++i)
+                buf[(size_t)i] = 0.0f;
+
+            clearIdx = end;
+            if (clearIdx >= n)
+            {
+                clearIdx = 0;
+                if (++clearCh >= NUM_CHANNELS) fullyCleared = true;
+            }
+        }
+
+        float amtCoef = 0.008f;    // prepareToPlay でSRから算出 (τ≒20ms)
+        bool  fullyCleared = true;
+        int   clearCh = 0;
+        int   clearIdx = 0;
     };
 
     // ------------------------------------------
@@ -479,6 +542,12 @@ namespace lfx
             curFeedback = 0.0f;
             lpStateL = lpStateR = 0.0f;
             dcX1L = dcY1L = dcX1R = dcY1R = 0.0f;
+
+            // 44.1kHz での旧固定値と一致する時定数を実時間で固定 (SR非依存化)
+            //  attack 0.001  @44.1k → τ ≒ 22.7ms
+            //  release 0.0002 @44.1k → τ ≒ 113ms
+            duckAtkCoef = (float)(1.0 - std::exp(-1.0 / (0.0227 * sr)));
+            duckRelCoef = (float)(1.0 - std::exp(-1.0 / (0.1134 * sr)));
         }
 
         void process(float& inOutL, float& inOutR, float amount, double bpm,
@@ -491,11 +560,12 @@ namespace lfx
             curAmount   += amountSmoothCoef * (amount - curAmount);
             curFeedback += fbSmoothCoef * (juce::jlimit(0.0f, 0.95f, feedback) - curFeedback);
 
+            // 入力検波 (ダッキング用)。係数は prepareToPlay で実時間から算出する。
+            //  旧実装は attack=0.001 / release=0.0002 のハードコードで、
+            //  192kHz では 44.1kHz の 4.35倍遅い検波になっていた。
             const float inSum = std::abs(inOutL) + std::abs(inOutR);
-            const float attack = 0.001f;
-            const float release = 0.0002f;
-            if (inSum > envelope) envelope += attack * (inSum - envelope);
-            else envelope += release * (inSum - envelope);
+            if (inSum > envelope) envelope += duckAtkCoef * (inSum - envelope);
+            else                  envelope += duckRelCoef * (inSum - envelope);
 
             const float duckingGain = 1.0f - juce::jlimit(0.0f, 0.85f, envelope * 4.0f * duck);
 
@@ -557,6 +627,7 @@ namespace lfx
         float curAmount = 0.0f;
         float curFeedback = 0.0f;
         float dcX1L = 0.0f, dcY1L = 0.0f, dcX1R = 0.0f, dcY1R = 0.0f;
+        float duckAtkCoef = 0.001f, duckRelCoef = 0.0002f;  // prepareToPlayでSRから算出
     };
 
     // ------------------------------------------
@@ -756,7 +827,7 @@ public:
     }
     static int satAlgoToType(int combo) noexcept
     {
-        static const int map[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 9, 10 };
+        static constexpr int map[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 9, 10 };
         return map[juce::jlimit(0, 9, combo)];
     }
 
@@ -767,7 +838,7 @@ public:
     }
     static float delayTimeToBeats(int idx) noexcept
     {
-        static const float beats[10] = { 2.0f, 1.5f, 1.0f, 2.0f / 3.0f, 0.75f,
+        static constexpr float beats[10] = { 2.0f, 1.5f, 1.0f, 2.0f / 3.0f, 0.75f,
                                          0.5f, 1.0f / 3.0f, 0.375f, 0.25f, 1.0f / 6.0f };
         return beats[juce::jlimit(0, 9, idx)];
     }
@@ -781,7 +852,7 @@ public:
     }
     static float duckRateToBeats(int idx) noexcept
     {
-        static const float beats[17] = {
+        static constexpr float beats[17] = {
             4.0f, 3.0f, 2.0f, 4.0f / 3.0f, 1.5f, 1.0f, 2.0f / 3.0f,
             0.75f, 0.5f, 1.0f / 3.0f, 0.375f, 0.25f, 1.0f / 6.0f,
             0.1875f, 0.125f, 1.0f / 12.0f, 0.0625f };
@@ -918,6 +989,33 @@ public:
             duckAmtSm = p.duckAmt; duckShapeSm = p.duckShape;
         }
 
+        // ---- スロットの解決をブロック先頭で1回だけ済ませる ----
+        //  旧実装はサンプルごとに p.type[] の読み出し・ルーティング配列の解決・
+        //  ソース本数のカウントを行っていた。これらはブロック内で不変なので、
+        //  ここでまとめて求めておく (音は一切変わらない)。
+        struct SlotPlan
+        {
+            int   type = 0;                       // FxType (0 = None)
+            const bool* route = nullptr;          // 対象ソース [kNumSources]
+            int   n = 0;                          // 対象ソース本数
+            float inv = 0.0f;                     // 1/n (n>0 のとき)
+        };
+        std::array<SlotPlan, kNumSlots> plan {};
+        for (int s = 0; s < kNumSlots; ++s)
+        {
+            const int t = p.type[(size_t)s];
+            if (t <= 0) continue;
+            const auto& rt = p.route[(size_t)juce::jlimit(0, 4, t - 1)];
+            int n = 0;
+            for (int k = 0; k < kNumSources; ++k)
+                if (rt[(size_t)k]) ++n;
+
+            plan[(size_t)s].type  = t;
+            plan[(size_t)s].route = rt.data();
+            plan[(size_t)s].n     = n;
+            plan[(size_t)s].inv   = (n > 0) ? 1.0f / (float)n : 0.0f;
+        }
+
         for (int i = 0; i < numSamples; ++i)
         {
             // カーブ変調パラメーターのサンプル単位平滑
@@ -931,30 +1029,29 @@ public:
 
             for (int s = 0; s < kNumSlots; ++s)
             {
-                const int t = p.type[(size_t)s];
-                if (t > 0)
+                const auto& pl = plan[(size_t)s];
+                if (pl.type > 0)
                 {
-                    const auto& rt = p.route[(size_t)juce::jlimit(0, 4, t - 1)];
+                    const bool* rt = pl.route;
 
                     // ルーティング対象バスの合計を作る
                     float inL = 0.0f, inR = 0.0f;
-                    int n = 0;
                     for (int k = 0; k < kNumSources; ++k)
-                        if (rt[(size_t)k]) { inL += busL[k][i]; inR += busR[k][i]; ++n; }
+                        if (rt[k]) { inL += busL[k][i]; inR += busR[k][i]; }
 
-                    if (t == Ducking)
+                    if (pl.type == Ducking)
                     {
                         // 純ゲイン: 対象バスへ直接適用 (対象が0本でも位相は進める)
                         const float g = ducker.nextGain(duckAmtSm, p.bpm, p.duckBeats, duckShapeSm);
                         for (int k = 0; k < kNumSources; ++k)
-                            if (rt[(size_t)k]) { busL[k][i] *= g; busR[k][i] *= g; }
+                            if (rt[k]) { busL[k][i] *= g; busR[k][i] *= g; }
                     }
                     else
                     {
                         // 対象が0本でも in=0 でモジュールを回し、内部バッファ/LFOを
                         // 進め続ける (陳腐化バースト防止。従来の設計方針を踏襲)
                         float oL = inL, oR = inR;
-                        switch (t)
+                        switch (pl.type)
                         {
                         case Saturation:
                             if (satAmtSm > 0.0005f)
@@ -972,13 +1069,12 @@ public:
                         default: break;
                         }
 
-                        if (n > 0)
+                        if (pl.n > 0)
                         {
-                            const float inv = 1.0f / (float)n;
-                            const float dLd = (oL - inL) * inv;
-                            const float dRd = (oR - inR) * inv;
+                            const float dLd = (oL - inL) * pl.inv;
+                            const float dRd = (oR - inR) * pl.inv;
                             for (int k = 0; k < kNumSources; ++k)
-                                if (rt[(size_t)k]) { busL[k][i] += dLd; busR[k][i] += dRd; }
+                                if (rt[k]) { busL[k][i] += dLd; busR[k][i] += dRd; }
                         }
                     }
                 }

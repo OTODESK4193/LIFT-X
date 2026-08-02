@@ -61,6 +61,8 @@ private:
     void timerCallback() override;
 
     void setActiveTab(Tab t);
+    // ヘッダーの ◀ ▶ など、タブ操作を伴わないプリセット変更後の再同期
+    void refreshAfterPresetChange();
     void styleTabButton(juce::TextButton& b, bool active);
 
     LiftXAudioProcessor& proc;

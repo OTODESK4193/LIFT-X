@@ -158,17 +158,33 @@ public:
             out[i] = sample((float)i / (float)n, morphPos, 1.0f / 512.0f, allowCustom);
     }
 
+    // ミップ選択: 再生周波数で許容される最大倍音数から決定。
+    //  ユニゾン全声部で共有できるよう、sample() から切り出してある。
+    //  (以前は sample() の中にあり、3OSC×7ユニゾン = 最大21回/サンプル
+    //   この while ループが回っていた)
+    static int mipFor(float phaseIncPerSample) noexcept
+    {
+        const float maxHarmF = 0.5f / juce::jmax(1.0e-6f, phaseIncPerSample); // sr/(2*f0)
+        int mip = 0;
+        while (mip < kNumMips - 1 && (float)(1024 >> mip) > maxHarmF)
+            ++mip;
+        return mip;
+    }
+
     // phase: 0..1, morphPos: 0..1, phaseIncPerSample: f0/sampleRate
     //  allowCustom=true かつカスタムWTロード済みならカスタムを使用。
     //  false ならビルトイン (Sine→Tri→Square→Saw→FM) を強制。
     float sample(float phase, float morphPos, float phaseIncPerSample,
                  bool allowCustom = true) const noexcept
     {
-        // ミップ選択: 再生周波数で許容される最大倍音数から決定
-        const float maxHarmF = 0.5f / juce::jmax(1.0e-6f, phaseIncPerSample); // sr/(2*f0)
-        int mip = 0;
-        while (mip < kNumMips - 1 && (float)(1024 >> mip) > maxHarmF)
-            ++mip;
+        return sampleAtMip(phase, morphPos, mipFor(phaseIncPerSample), allowCustom);
+    }
+
+    // ミップ番号を外から与える版 (ユニゾンでミップを共有するときに使う)
+    float sampleAtMip(float phase, float morphPos, int mip,
+                      bool allowCustom = true) const noexcept
+    {
+        mip = juce::jlimit(0, kNumMips - 1, mip);
 
         const float idx = phase * (float)kTableSize;
         const int i0 = juce::jlimit(0, kTableSize - 1, (int)idx);

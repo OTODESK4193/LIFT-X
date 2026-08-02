@@ -24,7 +24,7 @@
 
 class LiftXAudioProcessor : public juce::AudioProcessor,
                             private juce::AudioProcessorValueTreeState::Listener,
-                            private juce::AsyncUpdater
+                            private juce::Timer
 {
 public:
     LiftXAudioProcessor();
@@ -121,8 +121,8 @@ public:
     }
     static double barsFromChoice(int idx) noexcept
     {
-        static const double b[10] = { 1.0 / 32.0, 1.0 / 16.0, 1.0 / 8.0, 1.0 / 4.0, 1.0 / 2.0,
-                                      1.0, 2.0, 4.0, 8.0, 16.0 };
+        static constexpr double b[10] = { 1.0 / 32.0, 1.0 / 16.0, 1.0 / 8.0, 1.0 / 4.0, 1.0 / 2.0,
+                                          1.0, 2.0, 4.0, 8.0, 16.0 };
         return b[juce::jlimit(0, 9, idx)];
     }
 
@@ -138,6 +138,11 @@ public:
     void stepPreset(int delta);   // ◀▶: Factory+Userの結合リストを順送り
     juce::String getCurrentPresetName() const { return mCurrentPresetName; }
 
+    // 現在のプリセットの「実体」。PRESETタブのブラウザがハイライトを
+    // 外部変更 (ヘッダーの ◀▶ / ステート復元) へ追従させるのに使う。
+    int getCurrentFactoryIndex() const noexcept { return mCurrentFactoryIndex; }
+    juce::File getCurrentUserFile() const { return mCurrentUserFile; }
+
     // ---- RANDOM (メッセージスレッド専用) ----
     //  MAINタブ + OSC ENVタブのパラメーターとカーブを「音楽的に破綻しない範囲」で
     //  ランダマイズする。MASTERエリア / FX / CONFIG / FILTER は一切変更しない。
@@ -152,6 +157,13 @@ private:
     //  対象OSCのStart/Endキーをスケールの最寄り音へスナップする。
     //  スナップ後はユーザーが自由に変更でき、次にKey/Scaleを触るまで再スナップしない。
     //  プリセット/ステート復元では発火しない (適用直後にスナップ状態を記録するため)。
+    //
+    //  ※ RT安全性について:
+    //   parameterChanged() はホストオートメーション経由だとオーディオスレッドから
+    //   呼ばれる。以前はここで AsyncUpdater::triggerAsyncUpdate() を呼んでいたが、
+    //   これは内部で MessageManager のキューにロックを取って push するため、
+    //   オーディオスレッドでのロック取得 (優先度逆転) とアロケーションを招いていた。
+    //   現在は atomic フラグを立てるだけにし、メッセージスレッドの Timer が拾う。
     struct SnapState
     {
         bool on = false;
@@ -165,11 +177,13 @@ private:
     };
     SnapState readSnapState() const;
     void parameterChanged(const juce::String& id, float newValue) override;
-    void handleAsyncUpdate() override;
+    void timerCallback() override;      // メッセージスレッド: mSnapDirty を拾う
     void snapKeysToScale();
     void rememberSnapState();
 
     SnapState mLastSnapState;
+    // オーディオスレッドから立てられ、メッセージスレッドで消費される
+    std::atomic<bool> mSnapDirty { false };
     void gatherEngineParams(RiserEngine::Params& ep) const noexcept;
     void gatherFxParams(FxChain::Params& fp, double bpm, double ppq, bool playing) const noexcept;
     void applyStateTree(juce::ValueTree state);   // APVTS+カーブ+WTパスを適用
@@ -205,6 +219,9 @@ private:
 
     // 直近のホストBPM (getTailLengthSeconds はプレイヘッドを参照できないため保持)
     std::atomic<double> mLastBpm { 120.0 };
+
+    // FXカーブ評価のセグメント探索ヒント (gatherFxParams は const なので mutable)
+    mutable std::array<int, CurveStore::kNumCurves> mFxCurveHint {};
 
     // ---- ライザー出力キャプチャ (prepareToPlayで事前確保) ----
     //  最大60秒。高SRでのメモリ肥大を防ぐためサンプル数の上限も併用する。

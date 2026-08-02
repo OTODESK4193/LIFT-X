@@ -30,16 +30,40 @@ public:
 
     void setType(int t) noexcept { type = juce::jlimit(0, 3, t); }
 
+    // ------------------------------------------------------------------
+    //  係数セット。
+    //  LIFT-X はフィルター1系統につき OSC1-3/Noise の4基を「同じ cutoff/res」で
+    //  動かすため、各基で setCoef() を呼ぶと std::tan が4回とも同じ引数で
+    //  計算されてしまう (4系統×4ソース = 16回/ティック)。
+    //  computeCoefs() で1回だけ求めて setCoefs() で配る運用にすることで、
+    //  tan の呼び出しが 1/4 になる。
+    // ------------------------------------------------------------------
+    struct Coefs
+    {
+        float k = 1.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+    };
+
     // cutoffHz: 20..0.45*sr / res: 0.5..12 (Q)
+    static Coefs computeCoefs(float cutoffHz, float res, double sampleRate) noexcept
+    {
+        const float maxHz = (float)(sampleRate * 0.45);
+        cutoffHz = juce::jlimit(20.0f, maxHz, cutoffHz);
+        const float g = std::tan(juce::MathConstants<float>::pi * cutoffHz / (float)sampleRate);
+
+        Coefs c;
+        c.k  = 1.0f / juce::jlimit(0.5f, 12.0f, res);
+        c.a1 = 1.0f / (1.0f + g * (g + c.k));
+        c.a2 = g * c.a1;
+        c.a3 = g * c.a2;
+        return c;
+    }
+
+    void setCoefs(const Coefs& c) noexcept { k = c.k; a1 = c.a1; a2 = c.a2; a3 = c.a3; }
+
+    // 単体で使う場合 (ノイズフィルター等)
     void setCoef(float cutoffHz, float res) noexcept
     {
-        const float maxHz = (float)(sr * 0.45);
-        cutoffHz = juce::jlimit(20.0f, maxHz, cutoffHz);
-        const float g = std::tan(juce::MathConstants<float>::pi * cutoffHz / (float)sr);
-        k = 1.0f / juce::jlimit(0.5f, 12.0f, res);
-        a1 = 1.0f / (1.0f + g * (g + k));
-        a2 = g * a1;
-        a3 = g * a2;
+        setCoefs(computeCoefs(cutoffHz, res, sr));
     }
 
     inline void processStereo(float& l, float& r) noexcept

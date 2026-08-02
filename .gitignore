@@ -361,3 +361,10 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# ---- LIFT-X: ローカルビルド生成物 ----
+# CMake の out-of-source ビルドディレクトリ。生成物なのでリポジトリには入れない。
+/build/
+/out/
+
+# レビュー用の一時成果物は残すが、バックアップは除外
+*.bak

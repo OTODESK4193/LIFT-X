@@ -100,15 +100,22 @@ public:
 
         if (std::abs(liveCutoff - cutoff) > 1.0f)
         {
-            float xLiveCut = freqToX(liveCutoff, area);
+            // ライブカットオフ位置の破線。
+            //  createDashedStroke は「元パス」と「出力先」に別のオブジェクトを
+            //  渡す必要がある (以前は同一の Path を両方に渡していた)。
+            //  また出力は既にストローク済みの塗り形状なので fillPath で描く
+            //  (strokePath で再度縁取ると線が二重に太る)。
+            const float xLiveCut = freqToX(liveCutoff, area);
+            juce::Path srcLine, dashedLine;
+            srcLine.startNewSubPath(xLiveCut, area.getY());
+            srcLine.lineTo(xLiveCut, area.getBottom());
+
+            const juce::PathStrokeType stroke(1.5f);
+            const float dashes[] = { 3.0f, 3.0f };
+            stroke.createDashedStroke(dashedLine, srcLine, dashes, 2);
+
             g.setColour(LiftColors::text.withAlpha(0.8f));
-            juce::Path dashLine;
-            dashLine.startNewSubPath(xLiveCut, area.getY());
-            dashLine.lineTo(xLiveCut, area.getBottom());
-            juce::PathStrokeType stroke(1.5f);
-            float dashes[] = { 3.0f, 3.0f };
-            stroke.createDashedStroke(dashLine, dashLine, dashes, 2);
-            g.strokePath(dashLine, stroke);
+            g.fillPath(dashedLine);
         }
 
         g.setColour(LiftColors::textDim);

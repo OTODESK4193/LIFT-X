@@ -112,8 +112,14 @@ private:
 
 public:
     // 外部（エディタ）から現在のプリセットを設定してハイライト同期
-    void setCurrentFile(const juce::File& f) { currentFile = f; currentFactoryIndex = -1; fileList.repaint(); }
-    void setCurrentFactory(int idx) { currentFactoryIndex = idx; currentFile = juce::File(); fileList.repaint(); }
+    void setCurrentFile(const juce::File& f)
+    {
+        currentFile = f; currentFactoryIndex = -1; revealCurrent();
+    }
+    void setCurrentFactory(int idx)
+    {
+        currentFactoryIndex = idx; currentFile = juce::File(); revealCurrent();
+    }
 
 private:
 
@@ -233,6 +239,31 @@ private:
         fileList.repaint();
     }
 
+    // 現在のプリセットが今の絞り込み結果に含まれていれば、その行が見えるまでスクロールする。
+    //  ヘッダーの ◀ ▶ で順送りしたとき、選択行が画面外にあるとハイライトが
+    //  見えないままになるため。含まれていない場合 (カテゴリ絞り込みで隠れている等) は
+    //  再描画のみ行う。
+    void revealCurrent()
+    {
+        const int fc = factoryRowCount();
+        int row = -1;
+
+        if (currentFactoryIndex >= 0)
+        {
+            for (int i = 0; i < fc; ++i)
+                if (factoryCur.getReference(i).index == currentFactoryIndex) { row = i; break; }
+        }
+        else if (currentFile != juce::File())
+        {
+            for (int i = 0; i < currentList.size(); ++i)
+                if (currentList.getReference(i).file == currentFile) { row = fc + i; break; }
+        }
+
+        if (row >= 0)
+            fileList.scrollToEnsureRowIsOnscreen(row);
+        fileList.repaint();
+    }
+
     void doSave()
     {
         if (!onSave) return;
@@ -290,7 +321,7 @@ private:
             if (!owner) return; bool a = (r == owner->selSub);
             if (a) g.fillAll(juce::Colour(0xff4a4a4a));
             g.setColour(a ? juce::Colours::white : juce::Colours::grey);
-            g.setFont(15.0f);
+            g.setFont(juce::Font(juce::FontOptions(15.0f)));
             g.drawText(owner->subCategories[r], 12, 0, w - 20, h, juce::Justification::centredLeft);
         }
         void listBoxItemClicked(int r, const juce::MouseEvent&) override {
@@ -317,7 +348,7 @@ private:
                 }
                 bool fav = owner->isFactoryFavorite(fi.index);
                 g.setColour(fav ? juce::Colour(0xffFFD700) : juce::Colours::darkgrey);
-                g.setFont(18.0f);
+                g.setFont(juce::Font(juce::FontOptions(18.0f)));
                 g.drawText(fav ? juce::String::fromUTF8("\xE2\x98\x85") : juce::String::fromUTF8("\xE2\x98\x86"),
                            6, 0, 22, h, juce::Justification::centred);
                 g.setColour(sel ? juce::Colours::white : juce::Colours::lightgrey);
@@ -337,7 +368,7 @@ private:
             }
             bool fav = owner->favorites.contains(it.file.getFullPathName());
             g.setColour(fav ? juce::Colour(0xffFFD700) : juce::Colours::darkgrey);
-            g.setFont(18.0f);
+            g.setFont(juce::Font(juce::FontOptions(18.0f)));
             g.drawText(fav ? juce::String::fromUTF8("\xE2\x98\x85") : juce::String::fromUTF8("\xE2\x98\x86"),
                        6, 0, 22, h, juce::Justification::centred);
             g.setColour(sel ? juce::Colours::white : juce::Colours::lightgrey);

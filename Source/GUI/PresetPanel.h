@@ -47,6 +47,7 @@ public:
         browser.onInit = [this]
         {
             proc.initPreset();
+            syncBrowserHighlight();   // Init は Factory/User どちらでもないため選択解除
             updateCurrentLabel();
         };
         browser.onClose = [this]
@@ -64,7 +65,12 @@ public:
         updateCurrentLabel();
     }
 
-    void refresh() { browser.refresh(); updateCurrentLabel(); }
+    void refresh()
+    {
+        browser.refresh();
+        syncBrowserHighlight();
+        updateCurrentLabel();
+    }
 
     void paint(juce::Graphics& g) override
     {
@@ -81,6 +87,16 @@ public:
     }
 
 private:
+    // プロセッサー側の「今読み込まれている実体」をブラウザのハイライトへ反映する。
+    //  ヘッダーの ◀ ▶ でプリセットを送った場合やステート復元の直後は、
+    //  ブラウザのクリックを経由しないため、これを呼ばないと選択表示が古いまま残る。
+    void syncBrowserHighlight()
+    {
+        const int fi = proc.getCurrentFactoryIndex();
+        if (fi >= 0) browser.setCurrentFactory(fi);
+        else         browser.setCurrentFile(proc.getCurrentUserFile());
+    }
+
     void updateCurrentLabel()
     {
         auto name = proc.getCurrentPresetName();

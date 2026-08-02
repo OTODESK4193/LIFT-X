@@ -175,6 +175,12 @@ public:
         detSm.fill(12.0f);
         sprSm.fill(0.7f);
         resSm.fill(0.9f);
+        // ユニゾン係数キャッシュを無効化 (次のティックで必ず再計算させる)
+        lastUni.fill(-1);
+        lastDet.fill(-1.0e9f);
+        lastSpr.fill(-1.0e9f);
+        maxCentsFac.fill(1.0f);
+        curveHint.fill(0);
         cutSm.fill(1000.0f);
         noiseResSm = 2.0f;
         noiseCutSm = 500.0f;
@@ -374,6 +380,14 @@ public:
                 const float* gl = gainL[(size_t)o].data();
                 const float* gr = gainR[(size_t)o].data();
 
+                // ミップはユニゾン全声部で共有する。
+                //  デチューンは最大 ±50cent (約±3%) なので inc の差は1オクターブに
+                //  遠く及ばず、最も高い声部を基準に選べばどの声部でも折り返さない。
+                //  (旧実装は声部ごとに while ループでミップを探索しており、
+                //   3OSC × 7声部 = 最大21回/サンプル 回っていた)
+                const int mip = MorphWavetable::mipFor(
+                    juce::jmin(0.45f, inc0 * maxCentsFac[(size_t)o]));
+
                 float lo = 0.0f, ro = 0.0f;
                 for (int v = 0; v < uni; ++v)
                 {
@@ -382,7 +396,7 @@ public:
                     float pv = ph[v] + inc;
                     if (pv >= 1.0f) pv -= 1.0f;
                     ph[v] = pv;
-                    const float s = wt->sample(pv, morph, inc, useCustom) * norm;
+                    const float s = wt->sampleAtMip(pv, morph, mip, useCustom) * norm;
                     lo += s * gl[v];
                     ro += s * gr[v];
                 }
@@ -465,15 +479,15 @@ private:
             liftSm += liftTickCoef * (posTarget - liftSm);
         const float evalPos = liftSm;
 
-        // バイポーラ偏差 (-1..1)
-        auto bip = [&curves, evalPos](int idx) noexcept
+        // バイポーラ偏差 (-1..1)。curveHint でセグメント探索を実質O(1)にする。
+        auto bip = [this, &curves, evalPos](int idx) noexcept
         {
-            return (curves.read(idx).evaluate(evalPos) - 0.5f) * 2.0f;
+            return (curves.read(idx).evaluate(evalPos, &curveHint[(size_t)idx]) - 0.5f) * 2.0f;
         };
         // ユニポーラ (0..1)
-        auto uni = [&curves, evalPos](int idx) noexcept
+        auto uni = [this, &curves, evalPos](int idx) noexcept
         {
-            return curves.read(idx).evaluate(evalPos);
+            return curves.read(idx).evaluate(evalPos, &curveHint[(size_t)idx]);
         };
 
         for (int o = 0; o < kNumOscs; ++o)
@@ -510,15 +524,38 @@ private:
             const float detEff = detSm[(size_t)o];
             const float sprEff = sprSm[(size_t)o];
 
+            // ---- ユニゾンのデチューン係数 / パンゲイン ----
+            //  旧実装は UNISON=1 でも常に kMaxUnison(7) 本を回していたため、
+            //  3OSC × 7 × (exp2 + cos + sin) = 63回の超越関数を毎ティック
+            //  計算していた。実際に使う本数だけに絞り、さらに
+            //  「本数・デチューン・スプレッドのいずれも変化していなければ
+            //   再計算そのものを飛ばす」ようにする。
+            //  DETUNE/SPREAD にカーブを描いていない通常のプリセットでは、
+            //  平滑が収束した時点で以降ずっとスキップされる。
             const int uniN = juce::jlimit(1, kMaxUnison, po.unison);
-            for (int v = 0; v < kMaxUnison; ++v)
+            const bool needRecalc = snapNext
+                                 || uniN != lastUni[(size_t)o]
+                                 || std::abs(detEff - lastDet[(size_t)o]) > 1.0e-4f
+                                 || std::abs(sprEff - lastSpr[(size_t)o]) > 1.0e-5f;
+
+            if (needRecalc)
             {
-                const float off = (uniN <= 1) ? 0.0f : (2.0f * (float)v / (float)(uniN - 1) - 1.0f);
-                centsFac[(size_t)o][(size_t)v] = std::exp2(off * detEff / 1200.0f);
-                const float pan = 0.5f + off * 0.5f * sprEff;
-                const float th = pan * juce::MathConstants<float>::halfPi;
-                gainL[(size_t)o][(size_t)v] = std::cos(th);
-                gainR[(size_t)o][(size_t)v] = std::sin(th);
+                lastUni[(size_t)o] = uniN;
+                lastDet[(size_t)o] = detEff;
+                lastSpr[(size_t)o] = sprEff;
+
+                for (int v = 0; v < uniN; ++v)
+                {
+                    const float off = (uniN <= 1) ? 0.0f : (2.0f * (float)v / (float)(uniN - 1) - 1.0f);
+                    centsFac[(size_t)o][(size_t)v] = std::exp2(off * detEff / 1200.0f);
+                    const float pan = 0.5f + off * 0.5f * sprEff;
+                    const float th = pan * juce::MathConstants<float>::halfPi;
+                    gainL[(size_t)o][(size_t)v] = std::cos(th);
+                    gainR[(size_t)o][(size_t)v] = std::sin(th);
+                }
+
+                // ミップ選択用: 最も高い声部のピッチ倍率 (= +detEff/2 cent 側)
+                maxCentsFac[(size_t)o] = std::exp2(detEff / 1200.0f);
             }
         }
 
@@ -567,10 +604,13 @@ private:
             // ノートオン直後はスナップ (前ノート終端からのグライド防止)
             if (snapNext) { cutSm[(size_t)j] = target; resSm[(size_t)j] = resTarget; }
 
+            // 同一フィルターの4ソース分は係数が完全に同じなので、
+            // std::tan を含む係数計算は1回だけ行って各基へ配る。
+            const auto coefs = TptSvf::computeCoefs(cutSm[(size_t)j], resSm[(size_t)j], sr);
             for (int s = 0; s < kNumSources; ++s)
             {
                 filters[(size_t)j][(size_t)s].setType(p.flt[(size_t)j].type);
-                filters[(size_t)j][(size_t)s].setCoef(cutSm[(size_t)j], resSm[(size_t)j]);
+                filters[(size_t)j][(size_t)s].setCoefs(coefs);
             }
         }
 
@@ -664,6 +704,16 @@ private:
     std::array<float, kNumOscs> posSm {};
     std::array<float, kNumOscs> detSm {};
     std::array<float, kNumOscs> sprSm {};
+
+    // ユニゾン係数の再計算スキップ判定用 (前回計算時の本数/デチューン/スプレッド)
+    std::array<int,   kNumOscs> lastUni { -1, -1, -1 };
+    std::array<float, kNumOscs> lastDet { -1.0e9f, -1.0e9f, -1.0e9f };
+    std::array<float, kNumOscs> lastSpr { -1.0e9f, -1.0e9f, -1.0e9f };
+    // ミップ選択用: 最高声部のピッチ倍率 = exp2(detune/1200)
+    std::array<float, kNumOscs> maxCentsFac { 1.0f, 1.0f, 1.0f };
+
+    // カーブ評価のセグメント探索ヒント (mutable: controlTick から更新される)
+    mutable std::array<int, CurveStore::kNumCurves> curveHint {};
     float smCoef = 0.01f;
     float smCoefFast = 0.03f;
     float liftSm = 1.0f;

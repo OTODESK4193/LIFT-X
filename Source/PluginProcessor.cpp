@@ -95,11 +95,21 @@ LiftXAudioProcessor::LiftXAudioProcessor()
         apvts.addParameterListener("osc" + juce::String(i) + "Scale", this);
 
     rememberSnapState();   // 起動直後は現在値をそのまま採用 (勝手に動かさない)
+
+    // Key/Scale変更の取り込みはメッセージスレッドのタイマーで行う。
+    //  ホストによってはプロセッサーの構築がメッセージスレッド以外で走るため、
+    //  startTimer は callAsync 経由で確実にメッセージスレッドから呼ぶ。
+    juce::MessageManager::callAsync(
+        [ref = juce::WeakReference<LiftXAudioProcessor>(this)]
+        {
+            if (ref != nullptr)
+                ref->startTimer(40);   // 25Hz: 操作の追従には十分で負荷も無視できる
+        });
 }
 
 LiftXAudioProcessor::~LiftXAudioProcessor()
 {
-    cancelPendingUpdate();
+    stopTimer();
     apvts.removeParameterListener("scaleOn", this);
     apvts.removeParameterListener("scaleKey", this);
     apvts.removeParameterListener("scaleType", this);
@@ -129,13 +139,18 @@ void LiftXAudioProcessor::rememberSnapState()
 
 void LiftXAudioProcessor::parameterChanged(const juce::String&, float)
 {
-    // オーディオスレッドから呼ばれる可能性があるためここでは何もせず、
-    // メッセージスレッドへ処理を委譲する (パラメーター書き換えはRT非安全)。
-    triggerAsyncUpdate();
+    // ホストオートメーション経由だとオーディオスレッドから呼ばれるため、
+    // ここでは atomic フラグを立てるだけに留める (ロックもアロケーションも無し)。
+    // 実際のスナップ処理は timerCallback() がメッセージスレッドで行う。
+    mSnapDirty.store(true, std::memory_order_release);
 }
 
-void LiftXAudioProcessor::handleAsyncUpdate()
+void LiftXAudioProcessor::timerCallback()
 {
+    // メッセージスレッド。パラメーターの書き換えはここでのみ行う。
+    if (!mSnapDirty.exchange(false, std::memory_order_acquire))
+        return;
+
     const auto now = readSnapState();
     if (!(now != mLastSnapState))
         return;                    // 実質変化なし (ステート復元直後など)
@@ -880,9 +895,10 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
         liftAuto ? mEngine.getProgressF() : pLift->load());
     if (pReverse->load() > 0.5f)
         evalPos = 1.0f - evalPos;   // REVERSE: エンジンと同一規則
+    // FX側もセグメント探索ヒントを共有する (エンジンとは別配列)
     auto bip = [this, evalPos](int idx) noexcept
     {
-        const float y = mCurves.read(idx).evaluate(evalPos);
+        const float y = mCurves.read(idx).evaluate(evalPos, &mFxCurveHint[(size_t)idx]);
         return (y - 0.5f) * 2.0f;
     };
     auto c01 = [](float v) noexcept { return juce::jlimit(0.0f, 1.0f, v); };
