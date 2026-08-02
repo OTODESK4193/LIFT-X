@@ -44,6 +44,13 @@ namespace
     juce::String ctStr(float v, int)    { return juce::String((int)std::round(v)) + "ct"; }
     juce::String octStr(float v, int)   { return juce::String(v, 1) + "oct"; }
     juce::String plainStr(float v, int) { return juce::String(v, 1); }
+    // PAN: -1=左端 / 0=中央 / +1=右端 を "L50 / C / R50" 表記にする
+    juce::String panStr(float v, int)
+    {
+        const int p = (int)std::round(std::abs(v) * 100.0f);
+        if (p < 1) return "C";
+        return (v < 0.0f ? "L" : "R") + juce::String(p);
+    }
 
     juce::AudioParameterFloatAttributes attr(juce::String (*fn)(float, int))
     {
@@ -267,6 +274,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
             juce::NormalisableRange<float>(0.0f, 100.0f), 12.0f, attr(ctStr)));
         add(std::make_unique<FloatP>(juce::ParameterID{"osc" + n + "Spread", 1}, "Osc" + n + " Spread",
             juce::NormalisableRange<float>(0.0f, 1.0f), 0.7f, attr(pctStr)));
+        // PAN: 基準定位。PAN ENVカーブはここを中心に±で振れる
+        add(std::make_unique<FloatP>(juce::ParameterID{"osc" + n + "Pan", 1}, "Osc" + n + " Pan",
+            juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f, attr(panStr)));
         add(std::make_unique<IntP>(juce::ParameterID{"osc" + n + "KeyStart", 1}, "Osc" + n + " Start Key",
             0, 127, 36, noteAttr));
         add(std::make_unique<IntP>(juce::ParameterID{"osc" + n + "KeyEnd", 1}, "Osc" + n + " End Key",
@@ -289,6 +299,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
         juce::NormalisableRange<float>(0.5f, 12.0f), 2.0f, attr(plainStr)));
     add(std::make_unique<FloatP>(juce::ParameterID{"noiseRange", 1}, "Noise Range",
         juce::NormalisableRange<float>(0.0f, 10.0f), 5.0f, attr(octStr)));
+    add(std::make_unique<FloatP>(juce::ParameterID{"noisePan", 1}, "Noise Pan",
+        juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f, attr(panStr)));
 
     // ---- フィルター 1-4 (ZDF/TPT + ソース別ルーティング) ----
     static const char* srcNames[4] = { "Osc1", "Osc2", "Osc3", "Noise" };
@@ -297,7 +309,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout LiftXAudioProcessor::createP
         const juce::String n(i);
         add(std::make_unique<BoolP>(juce::ParameterID{"flt" + n + "On", 1}, "Filter" + n + " On", i == 1));
         add(std::make_unique<ChoiceP>(juce::ParameterID{"flt" + n + "Type", 1}, "Filter" + n + " Type",
-            juce::StringArray{"LowPass", "HighPass", "BandPass", "Notch"}, 0));
+            juce::StringArray{"LowPass", "HighPass", "BandPass", "Notch",
+                              "Vowel", "Comb"}, 0));
         add(std::make_unique<FloatP>(juce::ParameterID{"flt" + n + "Cutoff", 1}, "Filter" + n + " Cutoff",
             logRange(20.0f, 20000.0f), 1000.0f, attr(hzStr)));
         add(std::make_unique<FloatP>(juce::ParameterID{"flt" + n + "Res", 1}, "Filter" + n + " Res",
@@ -432,7 +445,8 @@ void LiftXAudioProcessor::cacheParameterPointers()
                             p("osc" + n + "Wave"), p("osc" + n + "Pos"), p("osc" + n + "Level"),
                             p("osc" + n + "Coarse"), p("osc" + n + "Fine"),
                             p("osc" + n + "Uni"), p("osc" + n + "Det"),
-                            p("osc" + n + "Spread"), p("osc" + n + "KeyStart"), p("osc" + n + "KeyEnd"),
+                            p("osc" + n + "Spread"), p("osc" + n + "Pan"),
+                            p("osc" + n + "KeyStart"), p("osc" + n + "KeyEnd"),
                             p("osc" + n + "Scale") };
     }
 
@@ -443,6 +457,7 @@ void LiftXAudioProcessor::cacheParameterPointers()
     pNoisePitch = p("noisePitch");
     pNoiseRes = p("noiseRes");
     pNoiseRange = p("noiseRange");
+    pNoisePan   = p("noisePan");
 
     static const char* srcNames[4] = { "Osc1", "Osc2", "Osc3", "Noise" };
     for (int i = 0; i < RiserEngine::kNumFilters; ++i)
@@ -933,6 +948,7 @@ void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noex
         o.unison = (int)q.uni->load();
         o.detune = q.det->load();
         o.spread = q.spread->load();
+        o.pan = q.pan != nullptr ? q.pan->load() : 0.0f;
         o.keyStart = (int)q.keyStart->load();
         o.keyEnd = (int)q.keyEnd->load();
         o.scaleQ = q.scaleQ->load() > 0.5f;
@@ -945,6 +961,7 @@ void LiftXAudioProcessor::gatherEngineParams(RiserEngine::Params& ep) const noex
     ep.noisePitch = pNoisePitch->load();
     ep.noiseRes = pNoiseRes->load();
     ep.noiseRangeOct = pNoiseRange->load();
+    ep.noisePan = pNoisePan != nullptr ? pNoisePan->load() : 0.0f;
 
     for (int i = 0; i < RiserEngine::kNumFilters; ++i)
     {

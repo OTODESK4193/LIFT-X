@@ -281,13 +281,15 @@ private:
     struct OscPtrs
     {
         std::atomic<float> *on, *solo, *mute, *wave, *pos, *level,
-                           *coarse, *fine, *uni, *det, *spread, *keyStart, *keyEnd, *scaleQ;
+                           *coarse, *fine, *uni, *det, *spread, *pan,
+                           *keyStart, *keyEnd, *scaleQ;
     };
     std::array<OscPtrs, RiserEngine::kNumOscs> pOsc {};
 
     std::atomic<float> *pNoiseSolo = nullptr, *pNoiseMute = nullptr,
                        *pNoiseType = nullptr, *pNoiseLevel = nullptr,
-                       *pNoisePitch = nullptr, *pNoiseRes = nullptr, *pNoiseRange = nullptr;
+                       *pNoisePitch = nullptr, *pNoiseRes = nullptr, *pNoiseRange = nullptr,
+                       *pNoisePan = nullptr;
 
     struct FltPtrs
     {

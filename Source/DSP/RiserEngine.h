@@ -80,6 +80,7 @@ public:
             int   unison = 1;
             float detune = 12.0f;    // cents
             float spread = 0.7f;
+            float pan = 0.0f;        // -1=L / 0=中央 / +1=R (PAN ENVの基準)
             int   keyStart = 36;     // C2
             int   keyEnd = 84;       // C6
             bool  scaleQ = true;     // このOSCにスケール量子化を適用するか
@@ -93,6 +94,7 @@ public:
         float noisePitch = 500.0f;
         float noiseRes = 2.0f;
         float noiseRangeOct = 5.0f;
+        float noisePan = 0.0f;
 
         struct Flt
         {
@@ -126,6 +128,12 @@ public:
         sr = juce::jmax(8000.0, sampleRate);
         blockSamples = juce::jmax(16, maxBlockSize);
         for (auto& row : filters)
+            for (auto& f : row)
+                f.prepare(sr);
+        for (auto& row : vowelFilters)
+            for (auto& f : row)
+                f.prepare(sr);
+        for (auto& row : combFilters)
             for (auto& f : row)
                 f.prepare(sr);
         noiseFilter.prepare(sr);
@@ -219,6 +227,10 @@ public:
         for (auto& row : filters)
             for (auto& f : row)
                 f.reset();
+        for (auto& row : vowelFilters)
+            for (auto& f : row) f.reset();
+        for (auto& row : combFilters)
+            for (auto& f : row) f.reset();
         noiseFilter.reset();
         pinkB.fill(0.0f);
         brownState = 0.0f;
@@ -293,6 +305,10 @@ private:
         for (auto& row : filters)
             for (auto& f : row)
                 f.reset();
+        for (auto& row : vowelFilters)
+            for (auto& f : row) f.reset();
+        for (auto& row : combFilters)
+            for (auto& f : row) f.reset();
         noiseFilter.reset();
     }
 
@@ -444,10 +460,10 @@ public:
                     ro += s * gr[v];
                 }
 
-                // ソース別フィルターチェーン
+                // ソース別フィルターチェーン (タイプで実体を振り分ける)
                 for (int j = 0; j < kNumFilters; ++j)
                     if (p.flt[(size_t)j].on && p.flt[(size_t)j].route[(size_t)o])
-                        filters[(size_t)j][(size_t)o].processStereo(lo, ro);
+                        applyFilter(j, o, p.flt[(size_t)j].type, lo, ro);
 
                 srcL[(size_t)o] = lo;
                 srcR[(size_t)o] = ro;
@@ -463,7 +479,7 @@ public:
 
                 for (int j = 0; j < kNumFilters; ++j)
                     if (p.flt[(size_t)j].on && p.flt[(size_t)j].route[3])
-                        filters[(size_t)j][3].processStereo(nl, nr);
+                        applyFilter(j, 3, p.flt[(size_t)j].type, nl, nr);
 
                 srcL[3] = nl;
                 srcR[3] = nr;
@@ -516,6 +532,14 @@ public:
     }
 
 private:
+    // フィルタータイプに応じて実体を振り分ける
+    inline void applyFilter(int j, int src, int type, float& l, float& r) noexcept
+    {
+        if (type == TptSvf::Vowel)      vowelFilters[(size_t)j][(size_t)src].processStereo(l, r);
+        else if (type == TptSvf::Comb)  combFilters[(size_t)j][(size_t)src].processStereo(l, r);
+        else                            filters[(size_t)j][(size_t)src].processStereo(l, r);
+    }
+
     // ---- KEY FOLLOW のピッチオフセット (半音) ----
     //  Fixed        : 0 (ノートを完全に無視 = 従来動作)
     //  Follow Start : 弾いた音が「開始音」になる → offset = played - OSC1.keyStart
@@ -637,8 +661,13 @@ private:
         }
 
         // ---- PAN ENV: 全ソースの定位 (-1=L .. 0=中央 .. +1=R) ----
+        //  他のバイポーラ加算式と同じ規則: ノブ値が基準、カーブがそこからの振れ幅。
         for (int s = 0; s < kNumSources; ++s)
-            panTarget[(size_t)s] = juce::jlimit(-1.0f, 1.0f, bip(CurveStore::panCurve(s)));
+        {
+            const float base = (s < kNumOscs) ? p.osc[(size_t)s].pan : p.noisePan;
+            panTarget[(size_t)s] = juce::jlimit(-1.0f, 1.0f,
+                                                base + bip(CurveStore::panCurve(s)));
+        }
 
         // ノイズ: PITCH (バイポーラoct) / LEVEL / RES
         {
@@ -693,13 +722,32 @@ private:
             // ノートオン直後はスナップ (前ノート終端からのグライド防止)
             if (snapNext) { cutSm[(size_t)j] = target; resSm[(size_t)j] = resTarget; }
 
-            // 同一フィルターの4ソース分は係数が完全に同じなので、
-            // std::tan を含む係数計算は1回だけ行って各基へ配る。
-            const auto coefs = TptSvf::computeCoefs(cutSm[(size_t)j], resSm[(size_t)j], sr);
-            for (int s = 0; s < kNumSources; ++s)
+            // タイプに応じて係数を配る。同一フィルターの4ソース分は
+            // 常に同じ設定なので、重い計算は1回だけ行って各基へ配る。
+            const int ftype = p.flt[(size_t)j].type;
+
+            if (ftype == TptSvf::Vowel)
             {
-                filters[(size_t)j][(size_t)s].setType(p.flt[(size_t)j].type);
-                filters[(size_t)j][(size_t)s].setCoefs(coefs);
+                // Vowel: CUTOFF の対数位置を A→U のモーフ量に読み替える
+                const float pos = juce::jlimit(0.0f, 1.0f,
+                    (std::log2(cutSm[(size_t)j]) - std::log2(80.0f))
+                    / (std::log2(8000.0f) - std::log2(80.0f)));
+                for (int s = 0; s < kNumSources; ++s)
+                    vowelFilters[(size_t)j][(size_t)s].setCoefs(pos, resSm[(size_t)j]);
+            }
+            else if (ftype == TptSvf::Comb)
+            {
+                for (int s = 0; s < kNumSources; ++s)
+                    combFilters[(size_t)j][(size_t)s].setCoefs(cutSm[(size_t)j], resSm[(size_t)j]);
+            }
+            else
+            {
+                const auto coefs = TptSvf::computeCoefs(cutSm[(size_t)j], resSm[(size_t)j], sr);
+                for (int s = 0; s < kNumSources; ++s)
+                {
+                    filters[(size_t)j][(size_t)s].setType(ftype);
+                    filters[(size_t)j][(size_t)s].setCoefs(coefs);
+                }
             }
         }
 
@@ -835,6 +883,11 @@ private:
 
     // [フィルター][ソース] = 16基 (ソース別ルーティング用)
     std::array<std::array<TptSvf, kNumSources>, kNumFilters> filters;
+    // Vowel / Comb は内部構造が違うため別インスタンスで持つ。
+    //  type に応じて render() が振り分ける。使わないときは回さないので
+    //  CPUコストは 0 (メモリは Comb の遅延バッファぶんだけ常時確保)。
+    std::array<std::array<VowelFilter, kNumSources>, kNumFilters> vowelFilters;
+    std::array<std::array<CombFilter,  kNumSources>, kNumFilters> combFilters;
     std::array<float, kNumFilters> cutSm { 1000.0f, 1000.0f, 1000.0f, 1000.0f };
     std::array<float, kNumFilters> resSm { 0.9f, 0.9f, 0.9f, 0.9f };
 

@@ -105,17 +105,20 @@ private:
     RiserWaveStrip waveStrip;
 
     // ModBand用パラメーターキャッシュ
-    std::array<juce::RangedAudioParameter*, 3> prmOscLevel {}, prmOscDet {}, prmOscSpread {};
+    std::array<juce::RangedAudioParameter*, 3> prmOscLevel {}, prmOscDet {},
+                                              prmOscSpread {}, prmOscPan {};
     juce::RangedAudioParameter* prmNoiseLevel = nullptr;
     juce::RangedAudioParameter* prmNoiseRes = nullptr;
     juce::RangedAudioParameter* prmNoisePitch = nullptr;
+    juce::RangedAudioParameter* prmNoisePan = nullptr;
 
     // ---- オシレーター 1-3 ----
     std::array<std::unique_ptr<GlowToggle>, 3> oscOn, oscSolo, oscMute;
     std::array<juce::ComboBox, 3> waveBox;
     std::array<WaveDisplay, 3> waveDisp;
     std::array<juce::TextButton, 3> browseBtn, rndBtn;
-    std::array<KnobCell, 3> oscPos, oscLevel, oscCoarse, oscFine, oscUni, oscDet, oscSpread;
+    std::array<KnobCell, 3> oscPos, oscLevel, oscCoarse, oscFine,
+                            oscUni, oscDet, oscSpread, oscPan;
     std::array<juce::TextButton, 3> keyStartBtn, keyEndBtn;
     // START <-> END を入れ替える (REVERSE と違いピッチだけが逆になる)
     std::array<juce::TextButton, 3> keySwapBtn;
@@ -131,7 +134,7 @@ private:
     std::unique_ptr<GlowToggle> noiseSolo, noiseMute;
     juce::Label noiseTitle;
     juce::ComboBox noiseTypeBox;
-    KnobCell noiseLevel, noisePitch, noiseRes, noiseRange;
+    KnobCell noiseLevel, noisePitch, noiseRes, noiseRange, noisePan;
 
     // ---- マスターエリア (ノイズ列の下) ----
     juce::Label masterTitle;

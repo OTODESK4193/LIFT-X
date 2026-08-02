@@ -76,6 +76,7 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         setupKnob(oscUni[(size_t)i], "UNISON", "osc" + n + "Uni", LiftColors::IdMint);
         setupKnob(oscDet[(size_t)i], "DETUNE", "osc" + n + "Det", LiftColors::IdMint);
         setupKnob(oscSpread[(size_t)i], "SPREAD", "osc" + n + "Spread", LiftColors::IdMint);
+        setupKnob(oscPan[(size_t)i], "PAN", "osc" + n + "Pan", LiftColors::IdMint);
 
         pitchRail[(size_t)i] = std::make_unique<PitchRail>(proc, i);
         addAndMakeVisible(*pitchRail[(size_t)i]);
@@ -138,6 +139,7 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     setupKnob(noisePitch, "PITCH", "noisePitch", LiftColors::IdLilac);
     setupKnob(noiseRes, "RES", "noiseRes", LiftColors::IdLilac);
     setupKnob(noiseRange, "RANGE", "noiseRange", LiftColors::IdLilac);
+    setupKnob(noisePan, "PAN", "noisePan", LiftColors::IdLilac);
 
     // ---- マスターエリア (ノイズ列の下): OUT + Limiter CEILING ----
     masterTitle.setText("MASTER", juce::dontSendNotification);
@@ -162,10 +164,12 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         prmOscLevel[(size_t)i] = proc.apvts.getParameter("osc" + n + "Level");
         prmOscDet[(size_t)i] = proc.apvts.getParameter("osc" + n + "Det");
         prmOscSpread[(size_t)i] = proc.apvts.getParameter("osc" + n + "Spread");
+        prmOscPan[(size_t)i] = proc.apvts.getParameter("osc" + n + "Pan");
     }
     prmNoiseLevel = proc.apvts.getParameter("noiseLevel");
     prmNoiseRes = proc.apvts.getParameter("noiseRes");
     prmNoisePitch = proc.apvts.getParameter("noisePitch");
+    prmNoisePan = proc.apvts.getParameter("noisePan");
 
     refreshKeyButtons();
     for (int i = 0; i < 3; ++i)
@@ -250,6 +254,9 @@ void MainPanel::updateModBands(float lift, float prog)
         ModBand::update(oscSpread[(size_t)i].knob, prmOscSpread[(size_t)i],
                         curves.read(CurveStore::oscCurve(i, 3)), lift, prog,
                         [](float b, float bip) { return b + bip * 1.0f; });
+        ModBand::update(oscPan[(size_t)i].knob, prmOscPan[(size_t)i],
+                        curves.read(CurveStore::panCurve(i)), lift, prog,
+                        [](float b, float bip) { return b + bip * 1.0f; });
     }
 
     ModBand::update(noiseLevel.knob, prmNoiseLevel,
@@ -258,6 +265,9 @@ void MainPanel::updateModBands(float lift, float prog)
     ModBand::update(noiseRes.knob, prmNoiseRes,
                     curves.read(CurveStore::NoiseRes), lift, prog,
                     [](float b, float bip) { return b + bip * 11.5f; });
+    ModBand::update(noisePan.knob, prmNoisePan,
+                    curves.read(CurveStore::panCurve(3)), lift, prog,
+                    [](float b, float bip) { return b + bip * 1.0f; });
 
     // NOISE PITCH は DSP 側で 20Hz..sr*0.45 にクランプされるため、表示も合わせる
     const float rangeOct = proc.apvts.getRawParameterValue("noiseRange")->load();
@@ -453,11 +463,10 @@ void MainPanel::resized()
         col.removeFromBottom(4);
 
         col.removeFromTop(4);
-        KnobCell* cells[8] = { &oscPos[(size_t)i],    &oscLevel[(size_t)i],
-                               &oscCoarse[(size_t)i], &oscFine[(size_t)i],
-                               &oscUni[(size_t)i],    &oscDet[(size_t)i],
-                               &oscSpread[(size_t)i], nullptr };
-        layoutKnobGrid(col, cells, 7, 3);
+        KnobCell* cells[9] = { &oscPos[(size_t)i],    &oscLevel[(size_t)i],  &oscCoarse[(size_t)i],
+                               &oscFine[(size_t)i],   &oscUni[(size_t)i],    &oscDet[(size_t)i],
+                               &oscSpread[(size_t)i], &oscPan[(size_t)i],    nullptr };
+        layoutKnobGrid(col, cells, 9, 3);
     }
 
     // ノイズ列 + マスターエリア
@@ -474,8 +483,9 @@ void MainPanel::resized()
         noiseTypeBox.setBounds(col.removeFromTop(22));
         col.removeFromTop(8);
 
-        KnobCell* cells[4] = { &noiseLevel, &noisePitch, &noiseRes, &noiseRange };
-        layoutKnobGrid(col.removeFromTop(180), cells, 4, 2);
+        KnobCell* cells[6] = { &noiseLevel, &noisePitch, &noiseRes,
+                               &noiseRange, &noisePan,   nullptr };
+        layoutKnobGrid(col.removeFromTop(180), cells, 6, 3);
 
         // MASTER: OUT + CEILING
         col.removeFromTop(8);

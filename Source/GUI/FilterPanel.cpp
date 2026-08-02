@@ -43,7 +43,8 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     onToggle = std::make_unique<GlowToggle>("ENABLE", LiftColors::accentFilter);
     addAndMakeVisible(*onToggle);
 
-    typeBox.addItemList({ "LowPass", "HighPass", "BandPass", "Notch" }, 1);
+    typeBox.addItemList({ "LowPass", "HighPass", "BandPass", "Notch",
+                          "Vowel", "Comb" }, 1);
     addAndMakeVisible(typeBox);
     typeLabel.setText("TYPE", juce::dontSendNotification);
     typeLabel.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
@@ -84,8 +85,9 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     hint.setFont(juce::Font(juce::FontOptions(12.0f)));
     hint.setColour(juce::Label::textColourId, LiftColors::textDim);
     hint.setJustificationType(juce::Justification::centredLeft);
-    hint.setText("Curve x ENV AMT sweeps CUTOFF & RES across full range "
-                 "(ZDF/TPT: stable even under fast sweeps)",
+    hint.setText("Curve x ENV AMT sweeps CUTOFF & RES across the full range.   "
+                 "VOWEL: CUTOFF morphs A-E-I-O-U, RES = formant sharpness.   "
+                 "COMB: CUTOFF = resonant pitch, RES = feedback (try it on NOISE).",
                  juce::dontSendNotification);
     addAndMakeVisible(hint);
 

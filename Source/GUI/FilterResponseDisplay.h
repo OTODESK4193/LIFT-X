@@ -150,6 +150,15 @@ private:
         return area.getBottom() - norm * area.getHeight();
     }
 
+    // 2次フィルターのバンドパス振幅 (Vowel の各フォルマントに使う)
+    static float bandPassMag(float f, float fc, float q)
+    {
+        const float w = f / juce::jmax(1.0f, fc);
+        float denom = (1.0f - w * w) * (1.0f - w * w) + (w / q) * (w / q);
+        denom = juce::jmax(1.0e-6f, denom);
+        return (w / q) / std::sqrt(denom);
+    }
+
     float calculateMagnitudeDb(float f, float fc, float Q, int type) const
     {
         float w = f / juce::jmax(1.0f, fc);
@@ -165,6 +174,47 @@ private:
             case 1: mag = (w * w) / std::sqrt(denom); break;
             case 2: mag = (w / q) / std::sqrt(denom); break;
             case 3: mag = std::abs(1.0f - w * w) / std::sqrt(denom); break;
+
+            case 4:   // ---- Vowel: 3フォルマントの合成 ----
+            {
+                // DSP側と同じマッピング: CUTOFF の対数位置 → A..U のモーフ量
+                static constexpr float kF[5][3] = {
+                    { 700.0f, 1220.0f, 2600.0f }, { 400.0f, 1700.0f, 2600.0f },
+                    { 250.0f, 1750.0f, 2600.0f }, { 400.0f,  750.0f, 2400.0f },
+                    { 250.0f,  600.0f, 2400.0f } };
+                static constexpr float kG[3] = { 1.0f, 0.62f, 0.28f };
+
+                const float pos = juce::jlimit(0.0f, 1.0f,
+                    (std::log2(juce::jmax(20.0f, fc)) - std::log2(80.0f))
+                    / (std::log2(8000.0f) - std::log2(80.0f)));
+                const float fp = pos * 4.0f;
+                const int i0 = juce::jlimit(0, 4, (int)fp);
+                const int i1 = juce::jmin(4, i0 + 1);
+                const float t = fp - (float)i0;
+                const float fq = juce::jlimit(1.0f, 14.0f, q * 1.4f);
+
+                mag = 0.0f;
+                for (int b = 0; b < 3; ++b)
+                {
+                    const float ff = std::exp2(std::log2(kF[i0][b]) * (1.0f - t)
+                                             + std::log2(kF[i1][b]) * t);
+                    mag += bandPassMag(f, ff, fq) * kG[b];
+                }
+                mag *= 0.8f;
+                break;
+            }
+
+            case 5:   // ---- Comb: |1 / (1 - fb·z^-D)| ----
+            {
+                // D = sr/fc なので wD = 2π·f/fc。基音の倍数ごとにピークが立つ。
+                const float fbAmt = juce::jlimit(0.0f, 0.97f,
+                    (juce::jlimit(0.5f, 12.0f, Q) - 0.5f) / 11.5f * 0.97f);
+                const float wd = juce::MathConstants<float>::twoPi * f / juce::jmax(20.0f, fc);
+                const float d = 1.0f - 2.0f * fbAmt * std::cos(wd) + fbAmt * fbAmt;
+                mag = (1.0f - fbAmt * 0.65f) / std::sqrt(juce::jmax(1.0e-6f, d));
+                break;
+            }
+
             default: mag = 1.0f / std::sqrt(denom); break;
         }
 
