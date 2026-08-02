@@ -554,10 +554,12 @@ private:
                                                        : logCut + modAmount * (logCut - std::log2(20.0f));
             const float target = juce::jlimit(20.0f, maxCutHz, std::exp2(logTarget));
 
+            const float resBip = bip(CurveStore::Filter1Res + j);
+            const float resModAmount = juce::jlimit(-1.0f, 1.0f, p.flt[(size_t)j].env * resBip);
             const float baseRes = juce::jlimit(0.5f, 12.0f, p.flt[(size_t)j].res);
             const float resTarget = juce::jlimit(0.5f, 12.0f,
-                modAmount >= 0.0f ? baseRes + modAmount * (12.0f - baseRes)
-                                  : baseRes + modAmount * (baseRes - 0.5f));
+                resModAmount >= 0.0f ? baseRes + resModAmount * (12.0f - baseRes)
+                                     : baseRes + resModAmount * (baseRes - 0.5f));
 
             cutSm[(size_t)j] += cutTickCoef * (target - cutSm[(size_t)j]);
             resSm[(size_t)j] += modTickCoef * (resTarget - resSm[(size_t)j]);

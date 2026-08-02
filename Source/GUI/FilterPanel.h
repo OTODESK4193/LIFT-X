@@ -37,6 +37,10 @@ private:
     std::array<std::unique_ptr<juce::TextButton>, 4> subTabs;
     int activeSub = 0;
 
+    // ENV ターゲット切り替え (0=CUTOFF, 1=RES)
+    std::array<std::unique_ptr<juce::TextButton>, 2> envTargetTabs;
+    int activeEnvTarget = 0;
+
     CurveEditor editor;
     FilterResponseDisplay responseDisplay;
 

@@ -137,8 +137,8 @@ private:
 
     float dbToY(float db, const juce::Rectangle<float>& area) const
     {
-        const float minDb = -24.0f;
-        const float maxDb = +12.0f;
+        const float minDb = -36.0f;
+        const float maxDb = +24.0f;
         float norm = (juce::jlimit(minDb, maxDb, db) - minDb) / (maxDb - minDb);
         return area.getBottom() - norm * area.getHeight();
     }
@@ -162,7 +162,7 @@ private:
         }
 
         float db = 20.0f * std::log10(juce::jmax(1.0e-4f, mag));
-        return juce::jlimit(-36.0f, 18.0f, db);
+        return juce::jlimit(-36.0f, 24.0f, db);
     }
 
     int filterType = 0;

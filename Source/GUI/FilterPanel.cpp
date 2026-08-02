@@ -6,11 +6,26 @@
 FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     : proc(p)
 {
+    // サブタブ (FLT 1 ~ FLT 4)
+    static const char* fltNames[4] = { "FLT 1", "FLT 2", "FLT 3", "FLT 4" };
     for (int i = 0; i < 4; ++i)
     {
-        subTabs[(size_t)i] = std::make_unique<juce::TextButton>("FLT " + juce::String(i + 1));
+        subTabs[(size_t)i] = std::make_unique<juce::TextButton>(fltNames[i]);
         subTabs[(size_t)i]->onClick = [this, i] { setSub(i); };
         addAndMakeVisible(*subTabs[(size_t)i]);
+    }
+
+    // ENV ターゲット切り替え (ENV: CUTOFF / ENV: RES)
+    static const char* envTargetNames[2] = { "ENV: CUTOFF", "ENV: RES" };
+    for (int i = 0; i < 2; ++i)
+    {
+        envTargetTabs[(size_t)i] = std::make_unique<juce::TextButton>(envTargetNames[i]);
+        envTargetTabs[(size_t)i]->onClick = [this, i]
+        {
+            activeEnvTarget = i;
+            setSub(activeSub);
+        };
+        addAndMakeVisible(*envTargetTabs[(size_t)i]);
     }
 
     addAndMakeVisible(editor);
@@ -18,7 +33,9 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     editor.setProgressProvider([this] { return proc.getEnvPosition(); });
     editor.onChanged = [this](const CurveSnapshot& s)
     {
-        proc.getCurves().publish(CurveStore::Filter1 + activeSub, s);
+        const int curveIdx = (activeEnvTarget == 0) ? (CurveStore::Filter1 + activeSub)
+                                                    : (CurveStore::Filter1Res + activeSub);
+        proc.getCurves().publish(curveIdx, s);
     };
 
     addAndMakeVisible(responseDisplay);
@@ -67,7 +84,7 @@ FilterPanel::FilterPanel(LiftXAudioProcessor& p)
     hint.setFont(juce::Font(juce::FontOptions(12.0f)));
     hint.setColour(juce::Label::textColourId, LiftColors::textDim);
     hint.setJustificationType(juce::Justification::centredLeft);
-    hint.setText("Curve x ENV AMT sweeps CUTOFF across full range "
+    hint.setText("Curve x ENV AMT sweeps CUTOFF & RES across full range "
                  "(ZDF/TPT: stable even under fast sweeps)",
                  juce::dontSendNotification);
     addAndMakeVisible(hint);
@@ -92,17 +109,25 @@ void FilterPanel::timerCallback()
 
     // ENV評価位置: Auto=Progress / Manual=LIFTノブ
     const float envPos = proc.getEnvPosition();
-    const float bipVal = (proc.getCurves().read(CurveStore::Filter1 + activeSub).evaluate(envPos) - 0.5f) * 2.0f;
-    const float modAmount = juce::jlimit(-1.0f, 1.0f, envAmt * bipVal);
+    const float cutBipVal = (proc.getCurves().read(CurveStore::Filter1 + activeSub).evaluate(envPos) - 0.5f) * 2.0f;
+    const float cutModAmount = juce::jlimit(-1.0f, 1.0f, envAmt * cutBipVal);
 
     const float maxHz = 20000.0f;
     const float baseHz = juce::jlimit(20.0f, maxHz, cutoffVal);
     const float logCut = std::log2(baseHz);
-    const float logTarget = modAmount >= 0.0f ? logCut + modAmount * (std::log2(maxHz) - logCut)
-                                               : logCut + modAmount * (logCut - std::log2(20.0f));
+    const float logTarget = cutModAmount >= 0.0f ? logCut + cutModAmount * (std::log2(maxHz) - logCut)
+                                               : logCut + cutModAmount * (logCut - std::log2(20.0f));
     const float liveCutoffHz = juce::jlimit(20.0f, maxHz, std::exp2(logTarget));
 
-    responseDisplay.setParams(typeState, cutoffVal, resVal, liveCutoffHz, onState);
+    // Resonance 独立変調 (Filter1Res..4Res) のリアルタイム値計算
+    const float resBipVal = (proc.getCurves().read(CurveStore::Filter1Res + activeSub).evaluate(envPos) - 0.5f) * 2.0f;
+    const float resModAmount = juce::jlimit(-1.0f, 1.0f, envAmt * resBipVal);
+    const float baseRes = juce::jlimit(0.5f, 12.0f, resVal);
+    const float liveResVal = juce::jlimit(0.5f, 12.0f,
+        resModAmount >= 0.0f ? baseRes + resModAmount * (12.0f - baseRes)
+                             : baseRes + resModAmount * (baseRes - 0.5f));
+
+    responseDisplay.setParams(typeState, cutoffVal, liveResVal, liveCutoffHz, onState);
 
     // CUTOFF ノブの ModBand 更新
     ModBand::update(cutoffKnob, prmCut,
@@ -115,9 +140,9 @@ void FilterPanel::timerCallback()
                         return juce::jlimit(20.0f, 20000.0f, std::exp2(lTgt));
                     });
 
-    // RES ノブの ModBand 更新 (ENVによるResonance動的変化のビジュアル可視化)
+    // RES ノブの ModBand 更新 (独立した Filter1Res..4Res カーブ使用)
     ModBand::update(resKnob, prmRes,
-                    proc.getCurves().read(CurveStore::Filter1 + activeSub), 1.0f, envPos,
+                    proc.getCurves().read(CurveStore::Filter1Res + activeSub), 1.0f, envPos,
                     [envAmt](float b, float bip) {
                         const float mAmt = juce::jlimit(-1.0f, 1.0f, envAmt * bip);
                         const float baseRes = juce::jlimit(0.5f, 12.0f, b);
@@ -129,7 +154,8 @@ void FilterPanel::timerCallback()
 void FilterPanel::setSub(int idx)
 {
     activeSub = juce::jlimit(0, 3, idx);
-    const int curveIdx = CurveStore::Filter1 + activeSub;
+    const int curveIdx = (activeEnvTarget == 0) ? (CurveStore::Filter1 + activeSub)
+                                                : (CurveStore::Filter1Res + activeSub);
     const juce::String n(activeSub + 1);
 
     editor.setSnapshot(proc.getCurves().get(curveIdx));
@@ -164,6 +190,9 @@ void FilterPanel::setSub(int idx)
 
     for (int i = 0; i < 4; ++i)
         styleTabButton(*subTabs[(size_t)i], i == activeSub);
+
+    for (int i = 0; i < 2; ++i)
+        styleTabButton(*envTargetTabs[(size_t)i], i == activeEnvTarget);
 }
 
 void FilterPanel::styleTabButton(juce::TextButton& b, bool active)
@@ -185,11 +214,11 @@ void FilterPanel::resized()
 {
     auto r = getLocalBounds().reduced(12, 10);
 
-    // サブタブ行 (FLT 1 ~ FLT 4)
+    // サブタブ行 (FLT 1 ~ FLT 4) と 右側に ENV: CUTOFF / ENV: RES 切り替えタブ
     auto top = r.removeFromTop(30);
     for (int i = 0; i < 4; ++i)
     {
-        subTabs[(size_t)i]->setBounds(top.removeFromLeft(96));
+        subTabs[(size_t)i]->setBounds(top.removeFromLeft(90));
         top.removeFromLeft(6);
     }
 
@@ -219,7 +248,13 @@ void FilterPanel::resized()
     r.removeFromLeft(8);
     auto rightArea = r;
 
-    // 左2/3: Env画面
+    // 左2/3: 上部に ENV: CUTOFF / ENV: RES タブ行、その下に Env画面 (editor)
+    auto envTabRow = leftArea.removeFromTop(26);
+    envTargetTabs[0]->setBounds(envTabRow.removeFromLeft(110));
+    envTabRow.removeFromLeft(6);
+    envTargetTabs[1]->setBounds(envTabRow.removeFromLeft(100));
+    leftArea.removeFromTop(4);
+
     editor.setBounds(leftArea);
 
     // 右1/3:

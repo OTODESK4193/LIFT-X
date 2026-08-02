@@ -139,15 +139,16 @@ public:
         Osc3Pitch,     Osc3Level, Osc3Detune, Osc3Spread,
         // ノイズ
         NoisePitch = 12, NoiseLevel, NoiseRes,
-        // フィルター
+        // フィルター (CUTOFF & RES 独立)
         Filter1 = 15, Filter2, Filter3, Filter4,
+        Filter1Res, Filter2Res, Filter3Res, Filter4Res,
         // FX
-        SatAmt = 19, SatDrive,
+        SatAmt = 23, SatDrive,
         ChoAmt, ChoDepth,
         DlyAmt, DlyFb, DlyTime,
         RevAmt, RevShimmer,
         DuckAmt, DuckRate, DuckShape,
-        kNumCurves // = 31
+        kNumCurves // = 35
     };
 
     // OSCソース(0-2) × ターゲット(0=Pitch 1=Level 2=Detune 3=Spread)
@@ -168,7 +169,8 @@ public:
             "OSC2 PITCH", "OSC2 LEVEL", "OSC2 DETUNE", "OSC2 SPREAD",
             "OSC3 PITCH", "OSC3 LEVEL", "OSC3 DETUNE", "OSC3 SPREAD",
             "NOISE PITCH", "NOISE LEVEL", "NOISE RES",
-            "FILTER 1", "FILTER 2", "FILTER 3", "FILTER 4",
+            "FILTER 1 CUTOFF", "FILTER 2 CUTOFF", "FILTER 3 CUTOFF", "FILTER 4 CUTOFF",
+            "FILTER 1 RES",    "FILTER 2 RES",    "FILTER 3 RES",    "FILTER 4 RES",
             "SAT AMT", "SAT DRIVE",
             "CHORUS AMT", "CHORUS DEPTH",
             "DELAY AMT", "DELAY FB", "DELAY TIME",
@@ -194,6 +196,8 @@ public:
         publish(NoisePitch, CurveSnapshot::makeDefault(0.5f, 1.0f));
         for (int f = Filter1; f <= Filter4; ++f)
             publish(f, CurveSnapshot::makeDefault(0.5f, 1.0f));
+        for (int f = Filter1Res; f <= Filter4Res; ++f)
+            publish(f, CurveSnapshot::makeDefault(0.5f, 0.5f));
     }
 
     // --- オーディオスレッド: 最新スナップショット参照 (コピー無し) ---
