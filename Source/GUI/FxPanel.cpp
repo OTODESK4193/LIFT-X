@@ -97,6 +97,15 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     mkCombo(duckRateBox, duckRateLabel, "RATE", "duckRate", FxChain::getDuckRateNames());
     mkKnob(duckShape, "SHAPE", "duckShape", LiftColors::IdPeach);
 
+    // TIME / RATE のカーブ変調による実効値表示
+    for (auto* l : { &dlyTimeLive, &duckRateLive })
+    {
+        l->setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+        l->setColour(juce::Label::textColourId, LiftColors::accentMaster);
+        l->setJustificationType(juce::Justification::centredLeft);
+        addAndMakeVisible(*l);
+    }
+
     // ---- ソース別ルーティング (FILTERタブと同じ操作感) ----
     //  OFFにしたソースは、選択中のエフェクトを完全にバイパスして素通しする。
     {
@@ -148,6 +157,7 @@ void FxPanel::timerCallback()
     case 2:
         upd(dlyAmt, "dlyAmt", CurveStore::DlyAmt, 1.0f);
         upd(dlyFb, "dlyFb", CurveStore::DlyFb, 0.95f);
+        updateDelayTimeLive(envPos);
         break;
     case 3:
         upd(revAmt, "revAmt", CurveStore::RevAmt, 1.0f);
@@ -156,8 +166,58 @@ void FxPanel::timerCallback()
     default:
         upd(duckAmt, "duckAmt", CurveStore::DuckAmt, 1.0f);
         upd(duckShape, "duckShape", CurveStore::DuckShape, 7.5f);
+        updateDuckRateLive(envPos);
         break;
     }
+}
+
+// ==========================================================
+// TIME / RATE の「カーブ適用後の実効値」表示
+//  どちらもコンボボックスなのでノブの変調帯が使えず、カーブを描いても
+//  どれだけ動いているかが画面上で全く分からなかった。
+// ==========================================================
+void FxPanel::updateDelayTimeLive(float envPos)
+{
+    const float bip = (proc.getCurves().read(CurveStore::DlyTime).evaluate(envPos) - 0.5f) * 2.0f;
+    const float mult = std::exp2(bip * 2.0f);   // DSPと同一: ±2オクターブ
+    const float beats = FxChain::delayTimeToBeats(
+        (int)proc.apvts.getRawParameterValue("dlyTime")->load()) * mult;
+
+    const double bpm = juce::jlimit(20.0, 999.0, proc.getLastBpm());
+    const int ms = (int)std::round(beats * 60000.0 / bpm);
+
+    juce::String t;
+    if (std::abs(mult - 1.0f) < 0.005f) t = juce::String(ms) + "ms";
+    else t = juce::String::formatted("x%.2f  %dms", mult, ms);
+
+    if (dlyTimeLive.getText() != t)
+        dlyTimeLive.setText(t, juce::dontSendNotification);
+}
+
+void FxPanel::updateDuckRateLive(float envPos)
+{
+    const float bip = (proc.getCurves().read(CurveStore::DuckRate).evaluate(envPos) - 0.5f) * 2.0f;
+    // DSPと同一: ±2オクターブを整数段へ量子化 (x4 .. x1/4)
+    const float mult = std::exp2((float)juce::roundToInt(bip * 2.0f));
+    const int baseIdx = (int)proc.apvts.getRawParameterValue("duckRate")->load();
+    const float beats = FxChain::duckRateToBeats(baseIdx) * mult;
+
+    // 実効拍数に最も近い表の名前を出す (音楽的に読みやすい)
+    const auto names = FxChain::getDuckRateNames();
+    int best = 0; float bestErr = 1.0e9f;
+    for (int i = 0; i < names.size(); ++i)
+    {
+        const float e = std::abs(FxChain::duckRateToBeats(i) - beats);
+        if (e < bestErr) { bestErr = e; best = i; }
+    }
+
+    juce::String t = (bestErr < 1.0e-3f) ? names[best]
+                                         : juce::String(beats, 3) + " beat";
+    if (best != baseIdx || bestErr >= 1.0e-3f)
+        t = names[baseIdx] + "  >  " + t;
+
+    if (duckRateLive.getText() != t)
+        duckRateLive.setText(t, juce::dontSendNotification);
 }
 
 // ==========================================================
@@ -170,13 +230,13 @@ std::vector<juce::Component*> FxPanel::componentsFor(int fx)
                      &satTrim.knob, &satTrim.label };
     case 1: return { &choAmt.knob, &choAmt.label, &choRate.knob, &choRate.label,
                      &choDepth.knob, &choDepth.label, &choWidth.knob, &choWidth.label };
-    case 2: return { &dlyAmt.knob, &dlyAmt.label, &dlyTimeBox, &dlyTimeLabel,
+    case 2: return { &dlyAmt.knob, &dlyAmt.label, &dlyTimeBox, &dlyTimeLabel, &dlyTimeLive,
                      &dlyFb.knob, &dlyFb.label, &dlyDuck.knob, &dlyDuck.label,
                      &dlyDamp.knob, &dlyDamp.label };
     case 3: return { &revAmt.knob, &revAmt.label, &revDecay.knob, &revDecay.label,
                      &revShimmer.knob, &revShimmer.label, &revDamp.knob, &revDamp.label,
                      &revMod.knob, &revMod.label };
-    default: return { &duckAmt.knob, &duckAmt.label, &duckRateBox, &duckRateLabel,
+    default: return { &duckAmt.knob, &duckAmt.label, &duckRateBox, &duckRateLabel, &duckRateLive,
                       &duckShape.knob, &duckShape.label };
     }
 }
@@ -287,13 +347,19 @@ void FxPanel::layoutCell(juce::Rectangle<int> area, Cell& c)
 }
 
 void FxPanel::layoutDetailGrid(juce::Rectangle<int> area, std::vector<Cell*> cells,
-                               juce::ComboBox* combo, juce::Label* comboLabel)
+                               juce::ComboBox* combo, juce::Label* comboLabel,
+                               juce::Label* liveLabel)
 {
     if (combo != nullptr && comboLabel != nullptr)
     {
         auto row = area.removeFromTop(44);
         comboLabel->setBounds(row.removeFromLeft(52));
         combo->setBounds(row.removeFromTop(24));
+
+        // コンボの下に「カーブ適用後の実効値」を small text で出す
+        if (liveLabel != nullptr)
+            liveLabel->setBounds(row.removeFromTop(16));
+
         area.removeFromTop(4);
     }
 
@@ -313,8 +379,7 @@ void FxPanel::layoutDetailGrid(juce::Rectangle<int> area, std::vector<Cell*> cel
 // ==========================================================
 void FxPanel::paint(juce::Graphics& g)
 {
-    g.setColour(LiftColors::panel);
-    g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(2.0f), 8.0f);
+    LiftColors::paintPanel(g, getLocalBounds().toFloat().reduced(2.0f));
 
     // 詳細エリアの枠
     if (!detailArea.isEmpty())
@@ -373,11 +438,11 @@ void FxPanel::resized()
     case 1: layoutDetailGrid(inner, { &choAmt, &choRate, &choDepth, &choWidth },
                              nullptr, nullptr); break;
     case 2: layoutDetailGrid(inner, { &dlyAmt, &dlyFb, &dlyDuck, &dlyDamp },
-                             &dlyTimeBox, &dlyTimeLabel); break;
+                             &dlyTimeBox, &dlyTimeLabel, &dlyTimeLive); break;
     case 3: layoutDetailGrid(inner, { &revAmt, &revDecay, &revShimmer, &revDamp, &revMod },
                              nullptr, nullptr); break;
     default: layoutDetailGrid(inner, { &duckAmt, &duckShape },
-                              &duckRateBox, &duckRateLabel); break;
+                              &duckRateBox, &duckRateLabel, &duckRateLive); break;
     }
 
     r.removeFromLeft(8);

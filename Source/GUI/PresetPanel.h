@@ -74,8 +74,7 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        g.setColour(LiftColors::panel);
-        g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(2.0f), 8.0f);
+        LiftColors::paintPanel(g, getLocalBounds().toFloat().reduced(2.0f));
     }
 
     void resized() override

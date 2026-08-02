@@ -90,6 +90,13 @@ public:
     // 直近のホストBPM (書き出しファイル名などGUI表示用)
     double getLastBpm() const noexcept { return mLastBpm.load(std::memory_order_relaxed); }
 
+    // ---- アウトプットメーター (ヘッダー表示用) ----
+    //  ブロック毎のピーク値。GUIは読むだけ (減衰はGUI側で行う)。
+    float getOutPeak(int ch) const noexcept
+    {
+        return mOutPeak[(size_t)juce::jlimit(0, 1, ch)].load(std::memory_order_relaxed);
+    }
+
     // ---- カスタムWavetable (OSC毎 / メッセージスレッド専用) ----
     bool loadCustomWavetable(int oscIdx, const juce::File& file);
     void clearCustomWavetable(int oscIdx);
@@ -222,6 +229,9 @@ private:
 
     // FXカーブ評価のセグメント探索ヒント (gatherFxParams は const なので mutable)
     mutable std::array<int, CurveStore::kNumCurves> mFxCurveHint {};
+
+    // アウトプットメーター (ブロック毎のピーク)
+    std::array<std::atomic<float>, 2> mOutPeak { };
 
     // ---- ライザー出力キャプチャ (prepareToPlayで事前確保) ----
     //  最大60秒。高SRでのメモリ肥大を防ぐためサンプル数の上限も併用する。

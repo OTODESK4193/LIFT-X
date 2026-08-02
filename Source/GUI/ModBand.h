@@ -28,12 +28,28 @@ namespace ModBand
     {
         if (param == nullptr) return;
 
+        // ---- カーブの値域 (yMin/yMax) ----
+        //  セグメント形状 shape(t,c) = t^(2^(3c)) は指数が常に正なので t に対して
+        //  単調。つまりセグメント内で極値を取ることはなく、最小・最大は必ず
+        //  制御点の上にある。よって制御点だけを走査すれば厳密解が得られる。
+        //
+        //  旧実装は 33点の等間隔サンプリングで近似していたため、
+        //  Steps32 / Saw32 / Pulse32 (65点) のような細かいカーブでは
+        //  頂点を取りこぼし、帯が実際の変化幅より狭く表示されていた。
+        //  制御点走査は正確なうえ、2点カーブなら評価回数も 33 → 2 に減る。
         float yMin = 1.0f, yMax = 0.0f;
-        for (int i = 0; i <= 32; ++i)
+        if (curve.numPoints <= 0)
         {
-            const float y = curve.evaluate((float)i / 32.0f);
-            yMin = juce::jmin(yMin, y);
-            yMax = juce::jmax(yMax, y);
+            yMin = yMax = 0.5f;
+        }
+        else
+        {
+            for (int i = 0; i < curve.numPoints; ++i)
+            {
+                const float y = curve.pts[(size_t)i].y;
+                yMin = juce::jmin(yMin, y);
+                yMax = juce::jmax(yMax, y);
+            }
         }
 
         // 常時表示: 帯(変化幅)とライブドット(現在値)を常にノブへ表示する

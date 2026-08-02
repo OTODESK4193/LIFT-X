@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "ColorPalette.h"
 
 // ============================================================================
 //  PresetBrowser  -  3カラムのプリセットブラウザ
@@ -30,16 +31,16 @@ public:
 
         catList.setModel(&catModel); subList.setModel(&subModel); fileList.setModel(&fileModel);
         catList.setRowHeight(38); subList.setRowHeight(34); fileList.setRowHeight(30);
-        catList.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff141414));
-        subList.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff181818));
-        fileList.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff1d1d1d));
+        catList.setColour(juce::ListBox::backgroundColourId, LiftColors::bg);
+        subList.setColour(juce::ListBox::backgroundColourId, LiftColors::bg.brighter(0.03f));
+        fileList.setColour(juce::ListBox::backgroundColourId, LiftColors::bg.brighter(0.06f));
         for (auto* l : { &catList, &subList, &fileList }) addAndMakeVisible(*l);
 
         auto styleEdit = [](juce::TextEditor& e, const juce::String& hint) {
-            e.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff121212));
-            e.setColour(juce::TextEditor::textColourId, juce::Colours::white);
-            e.setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff444444));
-            e.setTextToShowWhenEmpty(hint, juce::Colours::grey);
+            e.setColour(juce::TextEditor::backgroundColourId, LiftColors::bg);
+            e.setColour(juce::TextEditor::textColourId, LiftColors::text);
+            e.setColour(juce::TextEditor::outlineColourId, LiftColors::panelLine);
+            e.setTextToShowWhenEmpty(hint, LiftColors::textDim);
         };
         addAndMakeVisible(searchBox); styleEdit(searchBox, "Search...");
         searchBox.onTextChange = [this] { updateFiles(); };
@@ -47,12 +48,12 @@ public:
         addAndMakeVisible(subBox);    styleEdit(subBox, "Subcategory (optional)");
 
         auto styleBtn = [](juce::TextButton& b, juce::Colour on) {
-            b.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2a2a));
+            b.setColour(juce::TextButton::buttonColourId, LiftColors::knobTrack);
             b.setColour(juce::TextButton::buttonOnColourId, on);
         };
-        addAndMakeVisible(saveBtn);  saveBtn.setButtonText("Save");  styleBtn(saveBtn, juce::Colours::green);
-        addAndMakeVisible(initBtn);  initBtn.setButtonText("Init");  styleBtn(initBtn, juce::Colours::grey);
-        addAndMakeVisible(closeBtn); closeBtn.setButtonText("Close"); styleBtn(closeBtn, juce::Colours::grey);
+        addAndMakeVisible(saveBtn);  saveBtn.setButtonText("Save");  styleBtn(saveBtn, LiftColors::mint);
+        addAndMakeVisible(initBtn);  initBtn.setButtonText("Init");  styleBtn(initBtn, LiftColors::lavender);
+        addAndMakeVisible(closeBtn); closeBtn.setButtonText("Close"); styleBtn(closeBtn, LiftColors::rose);
         saveBtn.onClick  = [this] { doSave(); };
         initBtn.onClick  = [this] { if (onInit) onInit(); };
         closeBtn.onClick = [this] { if (onClose) onClose(); };
@@ -64,10 +65,10 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(juce::Colour(0xff111111));
-        g.setColour(juce::Colour(0xff3a3a3a));
+        g.fillAll(LiftColors::panel);
+        g.setColour(LiftColors::panelLine);
         g.drawRect(getLocalBounds(), 1);
-        g.setColour(juce::Colours::white.withAlpha(0.5f));
+        g.setColour(LiftColors::textDim);
         g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
         g.drawText("CATEGORY", colX(0) + 8, 4, 120, 14, juce::Justification::left);
         g.drawText("SUBCATEGORY", colX(1) + 8, 4, 160, 14, juce::Justification::left);
@@ -304,8 +305,8 @@ private:
         int getNumRows() override { return owner ? owner->categories.size() : 0; }
         void paintListBoxItem(int r, juce::Graphics& g, int w, int h, bool) override {
             if (!owner) return; bool a = (r == owner->selCat);
-            if (a) g.fillAll(juce::Colour(0xff3a3a3a));
-            g.setColour(a ? juce::Colours::white : juce::Colours::grey);
+            if (a) g.fillAll(LiftColors::accentMaster.withAlpha(0.18f));
+            g.setColour(a ? LiftColors::text : LiftColors::textDim);
             g.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
             g.drawText(owner->categories[r], 12, 0, w - 20, h, juce::Justification::centredLeft);
         }
@@ -319,8 +320,8 @@ private:
         int getNumRows() override { return owner ? owner->subCategories.size() : 0; }
         void paintListBoxItem(int r, juce::Graphics& g, int w, int h, bool) override {
             if (!owner) return; bool a = (r == owner->selSub);
-            if (a) g.fillAll(juce::Colour(0xff4a4a4a));
-            g.setColour(a ? juce::Colours::white : juce::Colours::grey);
+            if (a) g.fillAll(LiftColors::accentMaster.withAlpha(0.14f));
+            g.setColour(a ? LiftColors::text : LiftColors::textDim);
             g.setFont(juce::Font(juce::FontOptions(15.0f)));
             g.drawText(owner->subCategories[r], 12, 0, w - 20, h, juce::Justification::centredLeft);
         }
@@ -342,16 +343,16 @@ private:
                 auto& fi = owner->factoryCur.getReference(r);
                 bool sel = (fi.index == owner->currentFactoryIndex);
                 if (sel) {
-                    g.fillAll(juce::Colour(0xff2c3a4a));
-                    g.setColour(juce::Colour(0xff4aa3ff));
+                    g.fillAll(LiftColors::accentMaster.withAlpha(0.16f));
+                    g.setColour(LiftColors::accentMaster);
                     g.fillRect(0, 0, 3, h);
                 }
                 bool fav = owner->isFactoryFavorite(fi.index);
-                g.setColour(fav ? juce::Colour(0xffFFD700) : juce::Colours::darkgrey);
+                g.setColour(fav ? LiftColors::peach : LiftColors::textDim.withAlpha(0.45f));
                 g.setFont(juce::Font(juce::FontOptions(18.0f)));
                 g.drawText(fav ? juce::String::fromUTF8("\xE2\x98\x85") : juce::String::fromUTF8("\xE2\x98\x86"),
                            6, 0, 22, h, juce::Justification::centred);
-                g.setColour(sel ? juce::Colours::white : juce::Colours::lightgrey);
+                g.setColour(sel ? LiftColors::text : LiftColors::textDim);
                 g.setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
                 g.drawText(juce::String::fromUTF8("\xE2\x97\x86 ") + fi.name + "    [" + fi.category + "]",
                            32, 0, w - 38, h, juce::Justification::centredLeft);
@@ -362,16 +363,16 @@ private:
             auto& it = owner->currentList.getReference(ui);
             bool sel = (it.file == owner->currentFile);
             if (sel) {   // 選択中プリセットをハイライト（左に縦アクセントバー＋背景）
-                g.fillAll(juce::Colour(0xff2c3a4a));
-                g.setColour(juce::Colour(0xff4aa3ff));
+                g.fillAll(LiftColors::accentMaster.withAlpha(0.16f));
+                g.setColour(LiftColors::accentMaster);
                 g.fillRect(0, 0, 3, h);
             }
             bool fav = owner->favorites.contains(it.file.getFullPathName());
-            g.setColour(fav ? juce::Colour(0xffFFD700) : juce::Colours::darkgrey);
+            g.setColour(fav ? LiftColors::peach : LiftColors::textDim.withAlpha(0.45f));
             g.setFont(juce::Font(juce::FontOptions(18.0f)));
             g.drawText(fav ? juce::String::fromUTF8("\xE2\x98\x85") : juce::String::fromUTF8("\xE2\x98\x86"),
                        6, 0, 22, h, juce::Justification::centred);
-            g.setColour(sel ? juce::Colours::white : juce::Colours::lightgrey);
+            g.setColour(sel ? LiftColors::text : LiftColors::textDim);
             g.setFont(juce::Font(juce::FontOptions(14.0f, sel ? juce::Font::bold : juce::Font::plain)));
             juce::String label = it.name;
             if (it.subCat.isNotEmpty() && it.subCat != "Uncategorized") label += "    [" + it.subCat + "]";

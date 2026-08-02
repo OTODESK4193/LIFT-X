@@ -50,9 +50,17 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
+    void mouseExit(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
 private:
+    // ---- ホバー / ドラッグ中の視覚フィードバック ----
+    void updateHover(juce::Point<float> pos);
+    void drawValueBadge(juce::Graphics& g, juce::Point<float> at, const juce::String& text);
+    int hoverPoint = -1;
+    int hoverSegment = -1;
+
     // ---- Snap / グリッド補助線 ----
     float snapX(float x) const;
 

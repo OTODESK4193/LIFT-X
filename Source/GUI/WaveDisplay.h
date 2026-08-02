@@ -43,10 +43,7 @@ public:
     void paint(juce::Graphics& g) override
     {
         const auto r = getLocalBounds().toFloat();
-        g.setColour(LiftColors::bg.brighter(0.06f));
-        g.fillRoundedRectangle(r, 5.0f);
-        g.setColour(LiftColors::panelLine);
-        g.drawRoundedRectangle(r.reduced(0.5f), 5.0f, 1.0f);
+        LiftColors::paintWell(g, r, 5.0f);
 
         // 中央線
         g.setColour(LiftColors::grid);

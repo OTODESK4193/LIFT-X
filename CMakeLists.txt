@@ -43,6 +43,22 @@ juce_add_plugin(LIFTX
 )
 
 # ----------------------------------------------------------------------------
+#  埋め込みフォント (BinaryData)
+#   Inter (UI) / JetBrains Mono (数値表示) — どちらも SIL OFL 1.1 で商用可。
+#   Source/Assets/Fonts/ に必要な4ウェイトだけを置いてある (計約900KB)。
+#   ライセンス全文は同フォルダの OFL-*.txt を参照。
+# ----------------------------------------------------------------------------
+juce_add_binary_data(LIFTX_Fonts
+    HEADER_NAME BinaryFonts.h
+    NAMESPACE   BinaryFonts
+    SOURCES
+        Source/Assets/Fonts/Inter-Regular.ttf
+        Source/Assets/Fonts/Inter-Bold.ttf
+        Source/Assets/Fonts/JetBrainsMono-Regular.ttf
+        Source/Assets/Fonts/JetBrainsMono-Bold.ttf
+)
+
+# ----------------------------------------------------------------------------
 #  ソース
 # ----------------------------------------------------------------------------
 target_sources(LIFTX PRIVATE
@@ -104,6 +120,7 @@ target_include_directories(LIFTX PRIVATE
 # ----------------------------------------------------------------------------
 target_link_libraries(LIFTX
     PRIVATE
+        LIFTX_Fonts
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats

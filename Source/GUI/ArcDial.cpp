@@ -3,10 +3,32 @@
 // ==========================================
 #include "ArcDial.h"
 #include "ColorPalette.h"
+#include "BinaryFonts.h"
 #include <cmath>
+
+juce::Typeface::Ptr ArcDialLookAndFeel::getTypefaceForFont(const juce::Font& f)
+{
+    const bool bold = f.isBold();
+
+    // 等幅を明示的に要求している箇所 (LiftFonts::mono) だけ JetBrains Mono
+    if (f.getTypefaceName() == LiftFonts::kMonoName)
+        return bold ? monoBold : monoRegular;
+
+    return bold ? interBold : interRegular;
+}
 
 ArcDialLookAndFeel::ArcDialLookAndFeel()
 {
+    // 埋め込みフォントの読み込み (エディタ生成時に1回だけ)
+    interRegular = juce::Typeface::createSystemTypefaceFor(
+        BinaryFonts::InterRegular_ttf, BinaryFonts::InterRegular_ttfSize);
+    interBold = juce::Typeface::createSystemTypefaceFor(
+        BinaryFonts::InterBold_ttf, BinaryFonts::InterBold_ttfSize);
+    monoRegular = juce::Typeface::createSystemTypefaceFor(
+        BinaryFonts::JetBrainsMonoRegular_ttf, BinaryFonts::JetBrainsMonoRegular_ttfSize);
+    monoBold = juce::Typeface::createSystemTypefaceFor(
+        BinaryFonts::JetBrainsMonoBold_ttf, BinaryFonts::JetBrainsMonoBold_ttfSize);
+
     setColour(juce::Slider::textBoxTextColourId, LiftColors::text);
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour(juce::ComboBox::backgroundColourId, LiftColors::panel);
@@ -39,7 +61,9 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     const auto angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
     const auto arcThickness = 5.0f;
 
-    // 1. 背景トラック
+    // 1. 背景トラック (内側に落ち影を1px入れて彫り込み感を出す)
+    g.setColour(LiftColors::bg.darker(0.35f));
+    g.drawEllipse(rx, ry + 1.0f, rw, rw, arcThickness);
     g.setColour(LiftColors::knobTrack);
     g.drawEllipse(rx, ry, rw, rw, arcThickness);
 
@@ -63,10 +87,12 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
 
         if (std::abs(aHi - aLo) > 0.001f)
         {
-            // 変化幅の帯: 白で目立たせる (Granular ModMatrix方式)
+            // 変化幅の帯。以前は juce::Colours::white 固定だったため、
+            // Sakura / Amber / Arctic など明度の高いテーマで浮いていた。
+            // テーマの text 色ベースにして馴染ませる。
             juce::Path band;
             band.addArc(rx, ry, rw, rw, aLo, aHi, true);
-            g.setColour(juce::Colours::white.withAlpha(0.55f));
+            g.setColour(LiftColors::text.withAlpha(0.50f));
             g.strokePath(band, juce::PathStrokeType(arcThickness + 4.0f,
                          juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
@@ -102,9 +128,9 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
         const auto aLive = rotaryStartAngle + live * (rotaryEndAngle - rotaryStartAngle);
         const float dotX = centreX + std::sin(aLive) * radius;
         const float dotY = centreY - std::cos(aLive) * radius;
-        g.setColour(juce::Colours::white.withAlpha(0.30f));
+        g.setColour(LiftColors::text.withAlpha(0.28f));
         g.fillEllipse(dotX - 5.0f, dotY - 5.0f, 10.0f, 10.0f);
-        g.setColour(juce::Colours::white);
+        g.setColour(LiftColors::text);
         g.fillEllipse(dotX - 2.6f, dotY - 2.6f, 5.2f, 5.2f);
     }
 }

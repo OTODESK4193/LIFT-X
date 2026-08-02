@@ -48,12 +48,15 @@ private:
     static const std::array<FxDef, 5>& defs();
 
     void timerCallback() override;
+    void updateDelayTimeLive(float envPos);
+    void updateDuckRateLive(float envPos);
     void mkKnob(Cell& c, const juce::String& text, const juce::String& paramId, int accentId);
     void mkCombo(juce::ComboBox& box, juce::Label& label, const juce::String& text,
                  const juce::String& paramId, const juce::StringArray& items);
     void layoutCell(juce::Rectangle<int> area, Cell& c);
     void layoutDetailGrid(juce::Rectangle<int> area, std::vector<Cell*> cells,
-                          juce::ComboBox* combo, juce::Label* comboLabel);
+                          juce::ComboBox* combo, juce::Label* comboLabel,
+                          juce::Label* liveLabel = nullptr);
     void setFx(int idx);
     void setCurve(int idx);
     void styleTabButton(juce::TextButton& b, bool active, juce::Colour accent);
@@ -84,6 +87,9 @@ private:
     Cell dlyAmt, dlyFb, dlyDuck, dlyDamp;
     juce::ComboBox dlyTimeBox;
     juce::Label dlyTimeLabel;
+    // TIME / RATE はコンボボックスなのでノブの変調帯 (ModBand) が付けられない。
+    // カーブでどれだけ動いているかが全く見えないため、実効値をテキストで出す。
+    juce::Label dlyTimeLive, duckRateLive;
 
     Cell revAmt, revDecay, revShimmer, revDamp, revMod;
 

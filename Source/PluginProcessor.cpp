@@ -704,6 +704,14 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
                          juce::Decibels::decibelsToGain(pLimCeiling->load()));
     }
 
+    // ---- アウトプットメーター用ピーク (GUIヘッダー表示) ----
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const int src = juce::jmin(ch, buffer.getNumChannels() - 1);
+        mOutPeak[(size_t)ch].store(buffer.getMagnitude(src, 0, numSamples),
+                                   std::memory_order_relaxed);
+    }
+
     // ---- ライザー出力キャプチャ (プラグイン最終出力 / RT安全: memcpy と算術のみ) ----
     //
     //  録音は2段階:

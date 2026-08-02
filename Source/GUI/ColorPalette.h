@@ -133,6 +133,39 @@ namespace LiftColors
         }
     }
 
+    // ------------------------------------------------------------------
+    //  共通描画ヘルパー
+    // ------------------------------------------------------------------
+
+    // パネル背景: 微細な縦グラデーション + 上端ハイライト + 枠。
+    //  ベタ塗りだと平坦に見えるため、上を +4.5% / 下を -3.5% にして
+    //  わずかな奥行きを出す。上端の1px明線が「面」の存在を強調する。
+    inline void paintPanel(juce::Graphics& g, juce::Rectangle<float> r, float corner = 8.0f)
+    {
+        juce::ColourGradient grad(panel.brighter(0.045f), r.getX(), r.getY(),
+                                  panel.darker(0.035f),   r.getX(), r.getBottom(), false);
+        g.setGradientFill(grad);
+        g.fillRoundedRectangle(r, corner);
+
+        g.setColour(text.withAlpha(0.07f));
+        g.drawLine(r.getX() + corner, r.getY() + 1.0f,
+                   r.getRight() - corner, r.getY() + 1.0f, 1.0f);
+
+        g.setColour(panelLine);
+        g.drawRoundedRectangle(r.reduced(0.5f), corner, 1.0f);
+    }
+
+    // 窪んだ表示エリア (波形/カーブ/レスポンス表示の下地)
+    inline void paintWell(juce::Graphics& g, juce::Rectangle<float> r, float corner = 6.0f)
+    {
+        juce::ColourGradient grad(bg.darker(0.15f),   r.getX(), r.getY(),
+                                  bg.brighter(0.05f), r.getX(), r.getBottom(), false);
+        g.setGradientFill(grad);
+        g.fillRoundedRectangle(r, corner);
+        g.setColour(panelLine);
+        g.drawRoundedRectangle(r.reduced(0.5f), corner, 1.0f);
+    }
+
     // カーブ番号 → アクセント色 (CurveStore::Index 順)
     inline juce::Colour curveAccent(int idx) noexcept
     {

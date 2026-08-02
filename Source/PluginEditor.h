@@ -58,12 +58,43 @@ public:
 private:
     enum class Tab { Main, OscEnv, Filter, Fx, Preset, Config };
 
+    // ---- リサイズ対応 (アスペクト比固定スケーリング) ----
+    //  設計上のUIサイズは常に kBaseW x kBaseH のまま扱い、実際のウィンドウ
+    //  サイズとの比率を AffineTransform で内側コンテナへ掛ける。
+    //  こうすることで各パネルの resized() を1行も書き換えずにリサイズできる。
+    static constexpr int kBaseW = 1020;
+    static constexpr int kBaseH = 640;
+
+    // 全UIを載せる内側コンテナ (これにスケール変換を掛ける)。
+    //  描画とレイアウトは親エディタ側の関数へ委譲する。
+    struct ContentComponent : juce::Component
+    {
+        std::function<void(juce::Graphics&)> onPaint;
+        std::function<void()> onLayout;
+        void paint(juce::Graphics& g) override { if (onPaint) onPaint(g); }
+        void resized() override { if (onLayout) onLayout(); }
+    };
+
+    ContentComponent content;
+    juce::ComponentBoundsConstrainer constrainer;
+
+    void paintContent(juce::Graphics& g);   // 旧 paint() の中身
+    void layoutContent();                   // 旧 resized() の中身
+
     void timerCallback() override;
 
     void setActiveTab(Tab t);
     // ヘッダーの ◀ ▶ など、タブ操作を伴わないプリセット変更後の再同期
     void refreshAfterPresetChange();
-    void styleTabButton(juce::TextButton& b, bool active);
+    void styleTabButton(juce::TextButton& b, bool active, juce::Colour accent);
+
+    // アクティブタブの下線描画用
+    juce::TextButton* activeTabButton = nullptr;
+    juce::Colour activeTabAccent { 0xffffb7c5 };
+
+    // ヘッダー右端のアウトプットメーター
+    juce::Rectangle<int> meterArea;
+    std::array<float, 2> meterLevel { 0.0f, 0.0f };
 
     LiftXAudioProcessor& proc;
     ArcDialLookAndFeel lnf;

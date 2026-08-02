@@ -240,10 +240,13 @@ void MainPanel::updateModBands(float lift, float prog)
                     curves.read(CurveStore::NoiseRes), lift, prog,
                     [](float b, float bip) { return b + bip * 11.5f; });
 
+    // NOISE PITCH は DSP 側で 20Hz..sr*0.45 にクランプされるため、表示も合わせる
     const float rangeOct = proc.apvts.getRawParameterValue("noiseRange")->load();
+    const float nyq = (float)(proc.getPreparedSampleRate() * 0.45);
     ModBand::update(noisePitch.knob, prmNoisePitch,
                     curves.read(CurveStore::NoisePitch), lift, prog,
-                    [rangeOct](float b, float bip) { return b * std::exp2(bip * rangeOct); });
+                    [rangeOct, nyq](float b, float bip)
+                    { return juce::jlimit(20.0f, nyq, b * std::exp2(bip * rangeOct)); });
 }
 
 void MainPanel::refreshWaveDisplay(int osc)
@@ -340,9 +343,8 @@ void MainPanel::paint(juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
 
-    g.setColour(LiftColors::panel);
-    g.fillRoundedRectangle(r.removeFromTop(150.0f).reduced(2.0f), 8.0f);
-    g.fillRoundedRectangle(r.reduced(2.0f).withTrimmedTop(4.0f), 8.0f);
+    LiftColors::paintPanel(g, r.removeFromTop(150.0f).reduced(2.0f));
+    LiftColors::paintPanel(g, r.reduced(2.0f).withTrimmedTop(4.0f));
 
     const auto cols = getLocalBounds().withTrimmedTop(158);
     g.setColour(LiftColors::panelLine);

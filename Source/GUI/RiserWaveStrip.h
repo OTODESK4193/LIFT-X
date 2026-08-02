@@ -34,10 +34,7 @@ public:
     void paint(juce::Graphics& g) override
     {
         const auto r = getLocalBounds().toFloat();
-        g.setColour(LiftColors::bg.brighter(0.05f));
-        g.fillRoundedRectangle(r, 6.0f);
-        g.setColour(LiftColors::panelLine);
-        g.drawRoundedRectangle(r.reduced(0.5f), 6.0f, 1.0f);
+        LiftColors::paintWell(g, r, 6.0f);
 
         const auto a = r.reduced(6.0f, 5.0f);
 

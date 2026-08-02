@@ -379,10 +379,42 @@ void CurveEditor::mouseDrag(const juce::MouseEvent& e)
     }
 }
 
-void CurveEditor::mouseUp(const juce::MouseEvent&)
+void CurveEditor::mouseUp(const juce::MouseEvent& e)
 {
     dragPoint = -1;
     dragSegment = -1;
+    updateHover(e.position);   // ドラッグ終了後のホバー状態を即反映
+    repaint();
+}
+
+// ---- ホバー: カーソル下のポイント/ハンドルを強調 ----
+void CurveEditor::updateHover(juce::Point<float> pos)
+{
+    const int hp = hitPoint(pos);
+    const int hs = (hp < 0) ? hitSegmentHandle(pos) : -1;
+    if (hp != hoverPoint || hs != hoverSegment)
+    {
+        hoverPoint = hp;
+        hoverSegment = hs;
+        setMouseCursor((hp >= 0 || hs >= 0) ? juce::MouseCursor::PointingHandCursor
+                                            : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+}
+
+void CurveEditor::mouseMove(const juce::MouseEvent& e)
+{
+    updateHover(e.position);
+}
+
+void CurveEditor::mouseExit(const juce::MouseEvent&)
+{
+    if (hoverPoint >= 0 || hoverSegment >= 0)
+    {
+        hoverPoint = hoverSegment = -1;
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        repaint();
+    }
 }
 
 void CurveEditor::mouseDoubleClick(const juce::MouseEvent& e)
@@ -441,11 +473,9 @@ void CurveEditor::paint(juce::Graphics& g)
     const auto bounds = getLocalBounds().toFloat();
     const auto a = plotArea();
 
-    // パネル背景
-    g.setColour(LiftColors::panel);
-    g.fillRoundedRectangle(bounds, 8.0f);
-    g.setColour(LiftColors::panelLine);
-    g.drawRoundedRectangle(bounds.reduced(0.5f), 8.0f, 1.0f);
+    // パネル背景 + プロットエリアを一段窪ませる (カーブを主役に見せる)
+    LiftColors::paintPanel(g, bounds);
+    LiftColors::paintWell(g, a.expanded(4.0f, 3.0f), 6.0f);
 
     // タイトル
     if (title.isNotEmpty())
@@ -455,8 +485,19 @@ void CurveEditor::paint(juce::Graphics& g)
         g.drawText(title, (int)a.getX(), 4, (int)a.getWidth(), 14, juce::Justification::centredLeft);
     }
 
-    // グリッド (4x4)
-    g.setColour(LiftColors::grid);
+    // ---- グリッド ----
+    //  Snap用の細分線を先に薄く、4分割の主線を後から濃く描いて階層を付ける
+    //  (旧実装は同じ濃さで重なっており、視線の拠り所が無かった)
+    if (gridDiv > 4)
+    {
+        g.setColour(LiftColors::text.withAlpha(snapOn ? 0.09f : 0.035f));
+        for (int i = 1; i < gridDiv; ++i)
+        {
+            const float gx = a.getX() + a.getWidth() * (float)i / (float)gridDiv;
+            g.drawVerticalLine((int)gx, a.getY(), a.getBottom());
+        }
+    }
+    g.setColour(LiftColors::text.withAlpha(0.10f));
     for (int i = 1; i < 4; ++i)
     {
         const float gx = a.getX() + a.getWidth() * (float)i / 4.0f;
@@ -465,26 +506,15 @@ void CurveEditor::paint(juce::Graphics& g)
         g.drawHorizontalLine((int)gy, a.getX(), a.getRight());
     }
 
-    // Snap用の補助線 (グリッド解像度に応じた縦線)
-    if (gridDiv > 4)
-    {
-        g.setColour(LiftColors::text.withAlpha(snapOn ? 0.10f : 0.05f));
-        for (int i = 1; i < gridDiv; ++i)
-        {
-            const float gx = a.getX() + a.getWidth() * (float)i / (float)gridDiv;
-            g.drawVerticalLine((int)gx, a.getY(), a.getBottom());
-        }
-    }
-
     // バイポーラ中央線 (=変化なしライン)
     if (bipolar)
     {
-        g.setColour(LiftColors::textDim.withAlpha(0.5f));
+        g.setColour(LiftColors::textDim.withAlpha(0.55f));
         const float cy = a.getCentreY();
         g.drawLine(a.getX(), cy, a.getRight(), cy, 1.0f);
     }
 
-    // カーブパス (2px刻みでサンプリング)
+    // ---- カーブパス (2px刻みでサンプリング) ----
     curvePath.clear();
     fillPath.clear();
 
@@ -501,51 +531,117 @@ void CurveEditor::paint(juce::Graphics& g)
     fillPath.lineTo(a.getRight(), a.getBottom());
     fillPath.closeSubPath();
 
-    g.setColour(accent.withAlpha(0.12f));
-    g.fillPath(fillPath);
+    // 塗り: 上ほど濃い縦グラデーション (「エネルギーが立ち上がる」印象を出す)
+    {
+        juce::ColourGradient fillGrad(accent.withAlpha(0.30f), a.getX(), a.getY(),
+                                      accent.withAlpha(0.02f), a.getX(), a.getBottom(), false);
+        g.setGradientFill(fillGrad);
+        g.fillPath(fillPath);
+    }
 
+    // 線: 外側グロー → 本体 の2段描き
+    g.setColour(accent.withAlpha(0.13f));
+    g.strokePath(curvePath, juce::PathStrokeType(6.5f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
     g.setColour(accent);
     g.strokePath(curvePath, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved,
                                                  juce::PathStrokeType::rounded));
 
-    // セグメントハンドル (◆)
-    g.setColour(accent.withAlpha(0.6f));
+    // ---- セグメントハンドル (◆) ----
     for (int i = 0; i < snap.numPoints - 1; ++i)
     {
         const auto hpPos = segmentHandlePos(i);
-        g.fillRect(hpPos.x - 3.0f, hpPos.y - 3.0f, 6.0f, 6.0f);
+        const bool hot = (hoverSegment == i || dragSegment == i);
+        const float s = hot ? 4.5f : 3.0f;
+        if (hot)
+        {
+            g.setColour(accent.withAlpha(0.25f));
+            g.fillEllipse(hpPos.x - s - 3.0f, hpPos.y - s - 3.0f, (s + 3.0f) * 2.0f, (s + 3.0f) * 2.0f);
+        }
+        g.setColour(accent.withAlpha(hot ? 1.0f : 0.55f));
+        g.fillRect(hpPos.x - s, hpPos.y - s, s * 2.0f, s * 2.0f);
     }
 
-    // ポイント
+    // ---- ポイント ----
     for (int i = 0; i < snap.numPoints; ++i)
     {
         const auto sp = toScreen(snap.pts[(size_t)i].x, snap.pts[(size_t)i].y);
+        const bool hot = (hoverPoint == i || dragPoint == i);
+        const float rad = hot ? 7.0f : 5.0f;
+
+        if (hot)   // ホバー/ドラッグ中はグローを足す
+        {
+            g.setColour(accent.withAlpha(0.28f));
+            g.fillEllipse(sp.x - rad - 4.0f, sp.y - rad - 4.0f,
+                          (rad + 4.0f) * 2.0f, (rad + 4.0f) * 2.0f);
+        }
         g.setColour(LiftColors::panel);
-        g.fillEllipse(sp.x - 5.5f, sp.y - 5.5f, 11.0f, 11.0f);
+        g.fillEllipse(sp.x - rad - 0.5f, sp.y - rad - 0.5f, (rad + 0.5f) * 2.0f, (rad + 0.5f) * 2.0f);
         g.setColour(accent);
-        g.drawEllipse(sp.x - 5.0f, sp.y - 5.0f, 10.0f, 10.0f, 2.0f);
+        g.drawEllipse(sp.x - rad, sp.y - rad, rad * 2.0f, rad * 2.0f, hot ? 2.4f : 2.0f);
     }
 
-    // プレイヘッド (Progress) - VBlank同期で更新
+    // ---- プレイヘッド (Progress) - VBlank同期で更新 ----
     const float prog = juce::jlimit(0.0f, 1.0f,
         progressProvider != nullptr ? progressProvider() : 0.0f);
     if (prog > 0.0001f)
     {
         const float px = a.getX() + prog * a.getWidth();
-        g.setColour(LiftColors::accentMaster.withAlpha(0.55f));
+
+        // 進行方向の後ろへ伸びるトレイル (動きを視覚的に強調)
+        const float trailW = juce::jmin(56.0f, px - a.getX());
+        if (trailW > 2.0f)
+        {
+            juce::ColourGradient tg(LiftColors::accentMaster.withAlpha(0.0f), px - trailW, 0.0f,
+                                    LiftColors::accentMaster.withAlpha(0.16f), px, 0.0f, false);
+            g.setGradientFill(tg);
+            g.fillRect(juce::Rectangle<float>(px - trailW, a.getY(), trailW, a.getHeight()));
+        }
+
+        g.setColour(LiftColors::accentMaster.withAlpha(0.6f));
         g.drawLine(px, a.getY(), px, a.getBottom(), 1.6f);
 
         const auto dot = toScreen(prog, snap.evaluate(prog));
-        g.setColour(LiftColors::accentMaster.withAlpha(0.3f));
-        g.fillEllipse(dot.x - 7.0f, dot.y - 7.0f, 14.0f, 14.0f);
+        g.setColour(LiftColors::accentMaster.withAlpha(0.28f));
+        g.fillEllipse(dot.x - 8.0f, dot.y - 8.0f, 16.0f, 16.0f);
         g.setColour(LiftColors::accentMaster);
         g.fillEllipse(dot.x - 3.5f, dot.y - 3.5f, 7.0f, 7.0f);
     }
 
-    // 目盛りラベル
+    // ---- 目盛りラベル ----
     g.setColour(LiftColors::textDim);
     g.setFont(juce::Font(juce::FontOptions(9.5f)));
     g.drawText("0", (int)a.getX() - 4, (int)a.getBottom() + 2, 20, 12, juce::Justification::centredLeft);
     g.drawText("Progress", (int)a.getCentreX() - 30, (int)a.getBottom() + 2, 60, 12, juce::Justification::centred);
     g.drawText("1", (int)a.getRight() - 12, (int)a.getBottom() + 2, 20, 12, juce::Justification::centredRight);
+
+    // ---- ドラッグ中の数値バッジ ----
+    //  掴んでいる点の座標を追従表示する (細かい調整がしやすくなる)
+    if (dragPoint >= 0 && dragPoint < snap.numPoints)
+        drawValueBadge(g, toScreen(snap.pts[(size_t)dragPoint].x, snap.pts[(size_t)dragPoint].y),
+                       juce::String((int)std::round(snap.pts[(size_t)dragPoint].x * 100.0f)) + "%  "
+                     + juce::String(snap.pts[(size_t)dragPoint].y, 2));
+    else if (dragSegment >= 0 && dragSegment < snap.numPoints - 1)
+        drawValueBadge(g, segmentHandlePos(dragSegment),
+                       "CURVE " + juce::String(snap.pts[(size_t)dragSegment].curve, 2));
+}
+
+// ドラッグ中の値バッジ (点の少し上に出す。画面外へはみ出す場合は下へ回す)
+void CurveEditor::drawValueBadge(juce::Graphics& g, juce::Point<float> at, const juce::String& text)
+{
+    const auto a = plotArea();
+    g.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
+    const float w = 78.0f, h = 18.0f;
+
+    float bx = juce::jlimit(a.getX(), a.getRight() - w, at.x - w * 0.5f);
+    float by = at.y - h - 12.0f;
+    if (by < a.getY()) by = at.y + 12.0f;
+
+    const juce::Rectangle<float> box(bx, by, w, h);
+    g.setColour(LiftColors::bg.withAlpha(0.92f));
+    g.fillRoundedRectangle(box, 4.0f);
+    g.setColour(accent.withAlpha(0.75f));
+    g.drawRoundedRectangle(box.reduced(0.5f), 4.0f, 1.0f);
+    g.setColour(LiftColors::text);
+    g.drawText(text, box, juce::Justification::centred);
 }

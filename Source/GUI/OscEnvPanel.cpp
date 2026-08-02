@@ -114,8 +114,7 @@ void OscEnvPanel::styleTabButton(juce::TextButton& b, bool active, juce::Colour 
 
 void OscEnvPanel::paint(juce::Graphics& g)
 {
-    g.setColour(LiftColors::panel);
-    g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(2.0f), 8.0f);
+    LiftColors::paintPanel(g, getLocalBounds().toFloat().reduced(2.0f));
 }
 
 void OscEnvPanel::resized()

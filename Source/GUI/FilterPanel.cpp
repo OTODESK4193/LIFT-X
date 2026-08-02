@@ -112,7 +112,9 @@ void FilterPanel::timerCallback()
     const float cutBipVal = (proc.getCurves().read(CurveStore::Filter1 + activeSub).evaluate(envPos) - 0.5f) * 2.0f;
     const float cutModAmount = juce::jlimit(-1.0f, 1.0f, envAmt * cutBipVal);
 
-    const float maxHz = 20000.0f;
+    // 上限は DSP と同じ sr*0.45 を使う。20000固定にしていたため、
+    // 44.1kHz では実際(19845Hz)より広く、48kHz以上では狭く表示されていた。
+    const float maxHz = (float)(proc.getPreparedSampleRate() * 0.45);
     const float baseHz = juce::jlimit(20.0f, maxHz, cutoffVal);
     const float logCut = std::log2(baseHz);
     const float logTarget = cutModAmount >= 0.0f ? logCut + cutModAmount * (std::log2(maxHz) - logCut)
@@ -129,15 +131,15 @@ void FilterPanel::timerCallback()
 
     responseDisplay.setParams(typeState, cutoffVal, liveResVal, liveCutoffHz, onState);
 
-    // CUTOFF ノブの ModBand 更新
+    // CUTOFF ノブの ModBand 更新 (DSP と同じ maxHz を使う)
     ModBand::update(cutoffKnob, prmCut,
                     proc.getCurves().read(CurveStore::Filter1 + activeSub), 1.0f, envPos,
-                    [envAmt](float b, float bip) {
+                    [envAmt, maxHz](float b, float bip) {
                         const float mAmt = juce::jlimit(-1.0f, 1.0f, envAmt * bip);
-                        const float lCut = std::log2(juce::jlimit(20.0f, 20000.0f, b));
-                        const float lTgt = mAmt >= 0.0f ? lCut + mAmt * (std::log2(20000.0f) - lCut)
+                        const float lCut = std::log2(juce::jlimit(20.0f, maxHz, b));
+                        const float lTgt = mAmt >= 0.0f ? lCut + mAmt * (std::log2(maxHz) - lCut)
                                                         : lCut + mAmt * (lCut - std::log2(20.0f));
-                        return juce::jlimit(20.0f, 20000.0f, std::exp2(lTgt));
+                        return juce::jlimit(20.0f, maxHz, std::exp2(lTgt));
                     });
 
     // RES ノブの ModBand 更新 (独立した Filter1Res..4Res カーブ使用)
@@ -193,6 +195,9 @@ void FilterPanel::setSub(int idx)
 
     for (int i = 0; i < 2; ++i)
         styleTabButton(*envTargetTabs[(size_t)i], i == activeEnvTarget);
+
+    // サブタブ切替直後に前のフィルターの帯が1フレーム残るのを防ぐ
+    timerCallback();
 }
 
 void FilterPanel::styleTabButton(juce::TextButton& b, bool active)
@@ -206,8 +211,7 @@ void FilterPanel::styleTabButton(juce::TextButton& b, bool active)
 
 void FilterPanel::paint(juce::Graphics& g)
 {
-    g.setColour(LiftColors::panel);
-    g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(2.0f), 8.0f);
+    LiftColors::paintPanel(g, getLocalBounds().toFloat().reduced(2.0f));
 }
 
 void FilterPanel::resized()
