@@ -428,22 +428,31 @@ void MainPanel::resized()
         liftCell.knob.setBounds(liftArea.reduced(2));
     }
     {
-        auto barsArea = top.removeFromLeft(104).reduced(4, 0);
-        barsLabel.setBounds(barsArea.removeFromTop(16));
-        barsBox.setBounds(barsArea.removeFromTop(24).reduced(2, 0));
-        barsArea.removeFromTop(4);
-        reverseButton->setBounds(barsArea.removeFromTop(20).reduced(2, 0));
-        barsArea.removeFromTop(3);
+        // BARS / REVERSE と RANDOM 系を2カラムに分ける。
+        //  1カラムに詰めるとボタン幅が足りずラベルが見切れていたため、
+        //  右側の PROGRESS / 録音エリアから幅を回している。
+        auto barsArea = top.removeFromLeft(300).reduced(4, 0);
+
+        auto barsCol = barsArea.removeFromLeft(112);
+        barsArea.removeFromLeft(10);
+        auto btnCol = barsArea;
+
+        barsLabel.setBounds(barsCol.removeFromTop(16));
+        barsBox.setBounds(barsCol.removeFromTop(26));
+        barsCol.removeFromTop(8);
+        reverseButton->setBounds(barsCol.removeFromTop(24));
+
         {
-            auto row = barsArea.removeFromTop(20).reduced(2, 0);
-            randomButton.setBounds(row.removeFromLeft(row.getWidth() / 2 - 2));
-            row.removeFromLeft(4);
+            auto row = btnCol.removeFromTop(24);
+            randomButton.setBounds(row.removeFromLeft(row.getWidth() / 2 - 3));
+            row.removeFromLeft(6);
             mutateButton.setBounds(row);
         }
-        barsArea.removeFromTop(3);
-        lockOscBtn->setBounds(barsArea.removeFromTop(18).reduced(2, 0));
-        barsArea.removeFromTop(2);
-        lockCurveBtn->setBounds(barsArea.removeFromTop(18).reduced(2, 0));
+        btnCol.removeFromTop(6);
+        // LOCK 系はラベルが長いので全幅に置く (LEDぶん左が詰まるため)
+        lockOscBtn->setBounds(btnCol.removeFromTop(22));
+        btnCol.removeFromTop(4);
+        lockCurveBtn->setBounds(btnCol.removeFromTop(22));
     }
 
     KnobCell* globals[2] = { &attackCell, &releaseCell };

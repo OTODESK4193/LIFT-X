@@ -28,7 +28,31 @@ public:
         : proc(p)
     {
         wavePath.preallocateSpace(kCols * 6 + 16);
+
+        // ---- NORM: 書き出し時に -0.3dBFS へノーマライズ ----
+        //  ライザーは設定次第でピークがばらつくので、DAWへ貼った直後の
+        //  音量が揃っていると即戦力度が上がる。設定はグローバルへ永続化。
+        normBtn.setClickingTogglesState(true);
+        normBtn.setTooltip("Normalize the exported WAV to -0.3 dBFS");
+        normBtn.setToggleState(
+            LiftXAudioProcessor::getGlobalSettings().getBoolValue("normalizeExport", false),
+            juce::dontSendNotification);
+        normBtn.onClick = [this]
+        {
+            auto& gs = LiftXAudioProcessor::getGlobalSettings();
+            gs.setValue("normalizeExport", normBtn.getToggleState());
+            gs.saveIfNeeded();
+            exportDirty = true;      // 設定が変わったので書き出し直す
+        };
+        addAndMakeVisible(normBtn);
+
         startTimerHz(6);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(5, 4);
+        normBtn.setBounds(r.removeFromTop(15).removeFromRight(46));
     }
 
     void paint(juce::Graphics& g) override
@@ -112,7 +136,8 @@ public:
             g.setColour(LiftColors::text.withAlpha(0.85f));
             const double sec = peakLen / juce::jmax(1.0, proc.getPreparedSampleRate());
             g.drawText("DRAG > WAV  " + juce::String(sec, 1) + "s",
-                       getLocalBounds().reduced(8, 2), juce::Justification::topRight);
+                       getLocalBounds().reduced(8, 2).withTrimmedRight(52),
+                       juce::Justification::topRight);
         }
     }
 
@@ -209,7 +234,9 @@ private:
         const int bpm = (int)std::round(proc.getLastBpm());
 
         return "LIFTX_" + nm + "_" + juce::String(bpm) + "bpm_"
-             + juce::String(sec, 1) + "s_" + juce::String(lastVersion) + ".wav";
+             + juce::String(sec, 1) + "s"
+             + (normBtn.getToggleState() ? "_norm" : "")
+             + "_" + juce::String(lastVersion) + ".wav";
     }
 
     juce::File writeWavFile()
@@ -238,6 +265,17 @@ private:
                     juce::AudioBuffer<float> buf(2, n);
                     buf.copyFrom(0, 0, ownL.data(), n);
                     buf.copyFrom(1, 0, ownR.data(), n);
+
+                    // ---- ノーマライズ (-0.3 dBFS) ----
+                    //  フェードを掛ける「前」に行う。後だと末尾のフェード部分が
+                    //  ピーク判定に混ざって正しく揃わない。
+                    if (normBtn.getToggleState())
+                    {
+                        const float peak = juce::jmax(buf.getMagnitude(0, 0, n),
+                                                      buf.getMagnitude(1, 0, n));
+                        if (peak > 1.0e-6f)
+                            buf.applyGain(juce::Decibels::decibelsToGain(-0.3f) / peak);
+                    }
 
                     const int fade = juce::jmin(n / 4,
                         (int)(proc.getPreparedSampleRate() * 0.008));
@@ -269,6 +307,7 @@ private:
 
     std::vector<float> ownL, ownR;
     juce::Path wavePath;
+    juce::TextButton normBtn { "NORM" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RiserWaveStrip)
 };

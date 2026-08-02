@@ -715,6 +715,9 @@ namespace lfx
             wasRepeat = false;
             curAmt = 0.0f;
             amtCoef = (float)(1.0 - std::exp(-1.0 / (0.004 * sr)));   // 4ms
+            // グレイン境界のクロスフェード長 (3ms)。
+            //  短すぎるとクリックが残り、長すぎると刻みの輪郭が甘くなる。
+            fadeLen = (float)(sr * 0.003);
         }
 
         void reset() noexcept
@@ -762,26 +765,43 @@ namespace lfx
             }
             wasRepeat = repeatPhase;
 
-            float outL = l, outR = r;
-            if (repeatPhase && curAmt > 0.0005f)
+            // ---- グレイン境界のクロスフェード ----
+            //  生音 ⇔ バッファ再生をハードに切り替えると波形が不連続になり、
+            //  AMT を上げるほど「プチプチ」というクリックになる。
+            //  リピート区間の入口と出口に短いフェードを掛けて繋ぐ。
+            //  隣接グレイン同士は元が同じライザーで相関が高いため、
+            //  等パワーではなくリニアクロスフェードのほうが自然に繋がる。
+            float blend = 0.0f;
+            if (repeatPhase)
+            {
+                const float t = (phase - 0.5f) * 2.0f;                 // 区間内 0..1
+                const float fadeFrac = juce::jlimit(0.02f, 0.45f, fadeLen / grainLen);
+                blend = juce::jlimit(0.0f, 1.0f,
+                                     juce::jmin(t, 1.0f - t) / fadeFrac);
+            }
+
+            const float g = curAmt * blend;
+
+            if (g > 0.0005f)
             {
                 int rp = captureStart + readOffset;
                 while (rp >= size) rp -= size;
-                outL = bufL[(size_t)rp];
-                outR = bufR[(size_t)rp];
-                if (++readOffset >= (int)grainLen) readOffset = 0;
+                l += (bufL[(size_t)rp] - l) * g;
+                r += (bufR[(size_t)rp] - r) * g;
             }
 
-            if (++writePos >= size) writePos = 0;
+            // 読み出し位置はリピート区間中だけ進める
+            if (repeatPhase && ++readOffset >= (int)grainLen)
+                readOffset = 0;
 
-            l += (outL - l) * curAmt;
-            r += (outR - r) * curAmt;
+            if (++writePos >= size) writePos = 0;
         }
 
     private:
         double sr = 44100.0;
         int size = 0, writePos = 0, readOffset = 0, captureStart = 0;
         float phase = 0.0f, curAmt = 0.0f, amtCoef = 0.01f;
+        float fadeLen = 128.0f;
         bool wasRepeat = false;
         std::vector<float> bufL, bufR;
     };
