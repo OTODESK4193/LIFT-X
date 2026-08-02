@@ -428,31 +428,36 @@ void MainPanel::resized()
         liftCell.knob.setBounds(liftArea.reduced(2));
     }
     {
-        // BARS / REVERSE と RANDOM 系を2カラムに分ける。
-        //  1カラムに詰めるとボタン幅が足りずラベルが見切れていたため、
-        //  右側の PROGRESS / 録音エリアから幅を回している。
-        auto barsArea = top.removeFromLeft(300).reduced(4, 0);
+        // ---- BARS / RANDOM 系: 2列 x 3行のグリッド ----
+        //   [BARS combo] [MUTATE  ]
+        //   [REVERSE   ] [LOCK OSC]
+        //   [RANDOM    ] [LOCK ENV]
+        //  両列とも BARS コンボと同じ幅に揃える。GlowToggle は左端に LED を
+        //  描くぶんテキスト領域が狭くなるが、この幅なら "LOCK OSC" も収まる。
+        constexpr int kColW = 112;   // = BARS コンボの幅
+        constexpr int kGap  = 8;
 
-        auto barsCol = barsArea.removeFromLeft(112);
-        barsArea.removeFromLeft(10);
-        auto btnCol = barsArea;
+        auto barsArea = top.removeFromLeft(kColW * 2 + kGap + 8).reduced(4, 0);
+        auto colA = barsArea.removeFromLeft(kColW);
+        barsArea.removeFromLeft(kGap);
+        auto colB = barsArea.removeFromLeft(kColW);
 
-        barsLabel.setBounds(barsCol.removeFromTop(16));
-        barsBox.setBounds(barsCol.removeFromTop(26));
-        barsCol.removeFromTop(8);
-        reverseButton->setBounds(barsCol.removeFromTop(24));
+        // 1行目だけ左列にラベルが乗るため、右列も同じ高さぶん下げて行を揃える
+        barsLabel.setBounds(colA.removeFromTop(16));
+        colB.removeFromTop(16);
 
-        {
-            auto row = btnCol.removeFromTop(24);
-            randomButton.setBounds(row.removeFromLeft(row.getWidth() / 2 - 3));
-            row.removeFromLeft(6);
-            mutateButton.setBounds(row);
-        }
-        btnCol.removeFromTop(6);
-        // LOCK 系はラベルが長いので全幅に置く (LEDぶん左が詰まるため)
-        lockOscBtn->setBounds(btnCol.removeFromTop(22));
-        btnCol.removeFromTop(4);
-        lockCurveBtn->setBounds(btnCol.removeFromTop(22));
+        barsBox.setBounds(colA.removeFromTop(26));
+        mutateButton.setBounds(colB.removeFromTop(26));
+
+        colA.removeFromTop(6);
+        colB.removeFromTop(6);
+        reverseButton->setBounds(colA.removeFromTop(24));
+        lockOscBtn->setBounds(colB.removeFromTop(24));
+
+        colA.removeFromTop(6);
+        colB.removeFromTop(6);
+        randomButton.setBounds(colA.removeFromTop(24));
+        lockCurveBtn->setBounds(colB.removeFromTop(24));
     }
 
     KnobCell* globals[2] = { &attackCell, &releaseCell };

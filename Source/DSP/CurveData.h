@@ -133,13 +133,18 @@ struct CurveSnapshot
 
     // --- シリアライズ ---
     //  基本形は "x,y,c;x,y,c;..."。
-    //  REPEAT が 2以上のときだけ先頭に "R<n>|" を付ける。
-    //  → 旧プリセット/旧セッションは R が無いので repeat=1 として読まれ、
-    //    完全に後方互換が保たれる。
+    //  REPEAT が 2以上のときだけ先頭に "R<n>;" というトークンを足す。
+    //
+    //  ※ 区切りに '|' ではなく ';' を使うのが重要。
+    //    FactoryPresets.cpp はカーブ同士の区切りに '|' を使っているため、
+    //    "R8|..." だとそこで分断されてしまう。
+    //    ';' なら点の区切りと同じなので、パーサーが素直に扱える。
+    //  → 旧プリセット/旧セッションは R トークンが無いので repeat=1 として
+    //    読まれ、完全に後方互換が保たれる。
     juce::String toString() const
     {
         juce::String s;
-        if (repeat > 1) s << "R" << repeat << "|";
+        if (repeat > 1) s << "R" << repeat << ";";
         for (int i = 0; i < numPoints; ++i)
         {
             if (i > 0) s << ";";
@@ -155,6 +160,7 @@ struct CurveSnapshot
         CurveSnapshot s;
 
         juce::String body = str;
+        // 旧形式 "R<n>|..." も読めるようにしておく (v0.6.0 で保存された可能性がある)
         if (body.startsWithChar('R'))
         {
             const int bar = body.indexOfChar('|');
@@ -169,6 +175,14 @@ struct CurveSnapshot
         for (const auto& seg : segs)
         {
             if (s.numPoints >= kMaxPoints) break;
+
+            // "R<n>" トークン (カンマを含まない) は REPEAT 指定
+            if (seg.startsWithChar('R') && !seg.containsChar(','))
+            {
+                s.repeat = juce::jlimit(1, 32, seg.substring(1).getIntValue());
+                continue;
+            }
+
             auto v = juce::StringArray::fromTokens(seg, ",", "");
             if (v.size() < 2) continue;
             Point p;
