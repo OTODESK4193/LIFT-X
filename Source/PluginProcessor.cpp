@@ -1103,7 +1103,7 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
 //   - Pitchカーブは単調 → 上がったり下がったりする不自然な動きを避ける
 //   - Scaleクオンタイズが有効ならキーをスケール構成音へスナップ
 // ==========================================================
-void LiftXAudioProcessor::randomizeMainAndOsc(bool lockOsc, bool lockCurves, bool lockBars)
+void LiftXAudioProcessor::randomizeMainAndOsc(bool lockOsc, bool lockCurves)
 {
     juce::Random rng((juce::int64)juce::Time::getHighResolutionTicks());
 
@@ -1124,7 +1124,7 @@ void LiftXAudioProcessor::randomizeMainAndOsc(bool lockOsc, bool lockCurves, boo
     // ---- グローバル ----
     //  Bars: 音楽的な長さへバイアス (1/2, 1, 2, 4, 8)。1/32などの極端値は選ばない
     static const int kBarChoices[] = { 4, 5, 6, 7, 7, 8 };
-    if (!lockBars)
+    if (!mLockBars)
         setP("bars", (float)kBarChoices[ri(0, 5)]);
     setP("attack",  rlog(0.5f, 30.0f));
     setP("release", rlog(120.0f, 900.0f));
@@ -1425,6 +1425,25 @@ void LiftXAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 }
 
 // ==========================================================
+// BARS ロック: プリセット読み込みで小節数を変えないための退避/復元
+//  正規化値 (0..1) でやり取りするので、Choice の項目数に依存しない。
+// ==========================================================
+float LiftXAudioProcessor::captureBars() const
+{
+    if (!mLockBars) return -1.0f;
+    if (auto* prm = apvts.getParameter("bars"))
+        return prm->getValue();
+    return -1.0f;
+}
+
+void LiftXAudioProcessor::restoreBars(float savedNormalised)
+{
+    if (savedNormalised < 0.0f) return;          // ロックしていない
+    if (auto* prm = apvts.getParameter("bars"))
+        prm->setValueNotifyingHost(savedNormalised);
+}
+
+// ==========================================================
 // プリセット (メッセージスレッド専用)
 // ==========================================================
 juce::File LiftXAudioProcessor::getUserPresetDir()
@@ -1460,7 +1479,11 @@ bool LiftXAudioProcessor::loadUserPreset(const juce::File& file)
     auto xml = juce::parseXML(file);
     if (xml == nullptr || !xml->hasTagName(apvts.state.getType()))
         return false;
+
+    const float keepBars = captureBars();        // BARS ロック中なら現在値を控える
     applyStateTree(juce::ValueTree::fromXml(*xml));
+    restoreBars(keepBars);
+
     mCurrentPresetName = file.getFileNameWithoutExtension();
     mCurrentFactoryIndex = -1;
     mCurrentUserFile = file;
@@ -1470,10 +1493,14 @@ bool LiftXAudioProcessor::loadUserPreset(const juce::File& file)
 
 void LiftXAudioProcessor::initPreset()
 {
+    const float keepBars = captureBars();
+
     // 全パラメーターをデフォルトへ + カーブ初期化 + カスタムWT解除
     for (auto* prm : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*>(prm))
             rp->setValueNotifyingHost(rp->getDefaultValue());
+
+    restoreBars(keepBars);
 
     mCurves.resetToDefaults();
     for (int i = 0; i < RiserEngine::kNumOscs; ++i)
@@ -1488,7 +1515,11 @@ void LiftXAudioProcessor::loadFactoryPreset(int index)
 {
     if (index < 0 || index >= FactoryPresets::count())
         return;
-    FactoryPresets::apply(*this, index);
+
+    const float keepBars = captureBars();
+    FactoryPresets::apply(*this, index);         // 内部で initPreset() も呼ばれる
+    restoreBars(keepBars);
+
     mCurrentPresetName = FactoryPresets::nameOf(index);
     mCurrentFactoryIndex = index;
     mCurrentUserFile = juce::File();

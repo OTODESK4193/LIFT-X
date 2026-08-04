@@ -41,8 +41,7 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     randomButton.onClick = [this, afterRandomise]
     {
         proc.randomizeMainAndOsc(lockOscBtn->getToggleState(),
-                                 lockCurveBtn->getToggleState(),
-                                 lockBarsBtn.getToggleState());
+                                 lockCurveBtn->getToggleState());
         afterRandomise();
     };
 
@@ -57,11 +56,28 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         afterRandomise();
     };
 
-    // BARS ロック (RANDOM で小節数を変えたくないとき)
+    // ---- BARS ロック ----
+    //  曲の尺に合わせて BARS を決めたあと、音色だけをプリセットで探したい、
+    //  という使い方のためのもの。ON のあいだは RANDOM でもプリセット読み込みでも
+    //  小節数が変わらない。状態はグローバル設定へ永続化する。
     lockBarsBtn.setClickingTogglesState(true);
-    lockBarsBtn.setTooltip("Lock BARS from RANDOM (same idea as LOCK OSC / LOCK ENV)");
+    lockBarsBtn.setTooltip("Lock BARS - keeps the bar length when loading presets and on RANDOM");
     lockBarsBtn.setColour(juce::TextButton::buttonOnColourId,
                           LiftColors::peach.withAlpha(0.45f));
+    {
+        const bool locked = LiftXAudioProcessor::getGlobalSettings()
+                                .getBoolValue("lockBars", false);
+        lockBarsBtn.setToggleState(locked, juce::dontSendNotification);
+        proc.setBarsLocked(locked);
+    }
+    lockBarsBtn.onClick = [this]
+    {
+        const bool locked = lockBarsBtn.getToggleState();
+        proc.setBarsLocked(locked);
+        auto& gs = LiftXAudioProcessor::getGlobalSettings();
+        gs.setValue("lockBars", locked);
+        gs.saveIfNeeded();
+    };
     addAndMakeVisible(lockBarsBtn);
 
     // ロックトグル (RANDOM の対象から外す)

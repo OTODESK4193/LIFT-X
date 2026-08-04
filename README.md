@@ -118,7 +118,7 @@ Eleven categories with **twelve or more each** — EDM, Trance, Bass, Techno, Ci
 | **REVERSE** | on/off | Reads every curve backwards — riser ↔ downer |
 | **RANDOM** | button | Randomises MAIN and OSC ENV only, never Master/FX/Config |
 | **MUTATE** | button | Nudges the current sound (Shift = larger jump) |
-| **L** (next to BARS) | toggle | Locks BARS from RANDOM |
+| **L** (next to BARS) | toggle | Locks BARS — the bar length survives RANDOM, Init and preset loading |
 | **LOCK OSC / LOCK ENV** | toggle | Excludes oscillators / curves from RANDOM |
 | **BARS** | 1/32 … 16 | Length of one full 0→1 sweep (10 steps) |
 | **ATTACK** | 0.1–500 ms | Amp envelope attack |
@@ -310,6 +310,7 @@ cmake --build build --config Release
 * **Talking risers.** Set a filter to **Vowel** and give it a Filter curve that goes low → high → mid. The formants read as "aa-ee-oh" instead of a filter sweep.
 * **Widen without chorus.** Give OSC 1 a Pan curve that travels left→right and OSC 2 the mirror image. The stereo image opens as the riser climbs, and it stays mono-compatible because the pan law is equal power.
 * **Explore, don't reroll.** When a patch is nearly right, press **MUTATE** repeatedly instead of RANDOM. Lock BARS with the small **L** button so the length stays glued to your arrangement.
+* **Audition presets at your own length.** With **L** on, the bar length you chose survives every preset change, so you can step through the whole factory bank with ◀▶ and hear each one at the length your arrangement actually needs. Session recall is unaffected — a saved project always reopens exactly as you left it.
 
 
 ## License

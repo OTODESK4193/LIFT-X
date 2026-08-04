@@ -155,13 +155,26 @@ public:
     //  ランダマイズする。MASTERエリア / FX / CONFIG / FILTER は一切変更しない。
     //  lockOsc   : OSCのパラメーター(波形/レベル/ユニゾン/キー等)を据え置く
     //  lockCurves: カーブ(ENVの形)を据え置く
-    //  lockBars  : 小節数を据え置く (曲に合わせた尺を保ちたいとき)
-    void randomizeMainAndOsc(bool lockOsc = false, bool lockCurves = false,
-                             bool lockBars = false);
+    //  小節数は setBarsLocked() の状態を見て自動的に据え置かれる。
+    void randomizeMainAndOsc(bool lockOsc = false, bool lockCurves = false);
 
     //  MUTATE: 完全なランダムではなく、現在の設定を少しだけ揺らす。
     //   気に入った音を壊さずに近傍を探索できる (amount 0.05〜0.5 程度)。
     void mutateMainAndOsc(float amount);
+
+    // ---- BARS ロック ----
+    //  ON のあいだ、小節数はユーザーが決めた値のまま固定される。
+    //   ・RANDOM でも変わらない
+    //   ・プリセットを読み込んでも変わらない (◀▶ / ブラウザ / Init すべて)
+    //  曲の尺に合わせて BARS を決めたあと、音色だけをプリセットで探したい
+    //  という使い方のためのもの。
+    //
+    //  ※ セッション復元 (setStateInformation) には適用しない。
+    //    保存したプロジェクトは保存時のとおりに戻る必要があるため。
+    //  ※ ロック状態自体はプリセットではなくグローバル設定へ永続化する
+    //    (プリセットに入れると「読み込むとロックが外れる」矛盾が起きる)。
+    void setBarsLocked(bool shouldLock) noexcept { mLockBars = shouldLock; }
+    bool isBarsLocked() const noexcept { return mLockBars; }
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -199,6 +212,13 @@ private:
     SnapState mLastSnapState;
     // オーディオスレッドから立てられ、メッセージスレッドで消費される
     std::atomic<bool> mSnapDirty { false };
+
+    // ---- BARS ロック (メッセージスレッド専用) ----
+    //  captureBars() で読み込み前の値を控え、restoreBars() で書き戻す。
+    //  ロックしていないときは -1 を返し、restoreBars 側が何もしない。
+    bool  mLockBars = false;
+    float captureBars() const;
+    void  restoreBars(float savedNormalised);
     void gatherEngineParams(RiserEngine::Params& ep) const noexcept;
     void gatherFxParams(FxChain::Params& fp, double bpm, double ppq, bool playing) const noexcept;
     void applyStateTree(juce::ValueTree state);   // APVTS+カーブ+WTパスを適用
