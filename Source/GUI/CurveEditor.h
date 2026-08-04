@@ -75,7 +75,13 @@ private:
     // ---- Snap / グリッド補助線 ----
     float snapX(float x) const;
 
-    // ---- カーブプリセット (ファクトリー20種 + ユーザーSave/Load) ----
+    // ---- カーブプリセット (ファクトリー47種 + ユーザーSave/Load) ----
+    //  種類が増えて1枚のメニューでは選びづらくなったため、
+    //  カテゴリごとのサブメニュー (ツリー) にしている。
+    //  カテゴリは名前と「開始ID・件数」で表す (IDは連続していること)。
+    struct CurveCategory { const char* name; int first; int count; };
+    static const std::vector<CurveCategory>& curveCategories();
+
     void showPresetMenu();
     void saveCurveDialog();
     static juce::File curveDir();

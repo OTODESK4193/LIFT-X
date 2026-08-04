@@ -1088,7 +1088,7 @@ void LiftXAudioProcessor::gatherFxParams(FxChain::Params& fp, double bpm, double
 //   - Pitchカーブは単調 → 上がったり下がったりする不自然な動きを避ける
 //   - Scaleクオンタイズが有効ならキーをスケール構成音へスナップ
 // ==========================================================
-void LiftXAudioProcessor::randomizeMainAndOsc(bool lockOsc, bool lockCurves)
+void LiftXAudioProcessor::randomizeMainAndOsc(bool lockOsc, bool lockCurves, bool lockBars)
 {
     juce::Random rng((juce::int64)juce::Time::getHighResolutionTicks());
 
@@ -1109,7 +1109,8 @@ void LiftXAudioProcessor::randomizeMainAndOsc(bool lockOsc, bool lockCurves)
     // ---- グローバル ----
     //  Bars: 音楽的な長さへバイアス (1/2, 1, 2, 4, 8)。1/32などの極端値は選ばない
     static const int kBarChoices[] = { 4, 5, 6, 7, 7, 8 };
-    setP("bars", (float)kBarChoices[ri(0, 5)]);
+    if (!lockBars)
+        setP("bars", (float)kBarChoices[ri(0, 5)]);
     setP("attack",  rlog(0.5f, 30.0f));
     setP("release", rlog(120.0f, 900.0f));
 

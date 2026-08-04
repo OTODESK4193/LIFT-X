@@ -155,7 +155,9 @@ public:
     //  ランダマイズする。MASTERエリア / FX / CONFIG / FILTER は一切変更しない。
     //  lockOsc   : OSCのパラメーター(波形/レベル/ユニゾン/キー等)を据え置く
     //  lockCurves: カーブ(ENVの形)を据え置く
-    void randomizeMainAndOsc(bool lockOsc = false, bool lockCurves = false);
+    //  lockBars  : 小節数を据え置く (曲に合わせた尺を保ちたいとき)
+    void randomizeMainAndOsc(bool lockOsc = false, bool lockCurves = false,
+                             bool lockBars = false);
 
     //  MUTATE: 完全なランダムではなく、現在の設定を少しだけ揺らす。
     //   気に入った音を壊さずに近傍を探索できる (amount 0.05〜0.5 程度)。

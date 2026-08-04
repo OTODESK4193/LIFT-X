@@ -41,7 +41,8 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     randomButton.onClick = [this, afterRandomise]
     {
         proc.randomizeMainAndOsc(lockOscBtn->getToggleState(),
-                                 lockCurveBtn->getToggleState());
+                                 lockCurveBtn->getToggleState(),
+                                 lockBarsBtn.getToggleState());
         afterRandomise();
     };
 
@@ -55,6 +56,13 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         proc.mutateMainAndOsc(big ? 0.35f : 0.12f);
         afterRandomise();
     };
+
+    // BARS ロック (RANDOM で小節数を変えたくないとき)
+    lockBarsBtn.setClickingTogglesState(true);
+    lockBarsBtn.setTooltip("Lock BARS from RANDOM");
+    lockBarsBtn.setColour(juce::TextButton::buttonOnColourId,
+                          LiftColors::peach.withAlpha(0.45f));
+    addAndMakeVisible(lockBarsBtn);
 
     // ロックトグル (RANDOM の対象から外す)
     lockOscBtn   = std::make_unique<GlowToggle>("LOCK OSC",  LiftColors::peach);
@@ -446,7 +454,12 @@ void MainPanel::resized()
         barsLabel.setBounds(colA.removeFromTop(16));
         colB.removeFromTop(16);
 
-        barsBox.setBounds(colA.removeFromTop(26));
+        {
+            auto barsRow = colA.removeFromTop(26);
+            lockBarsBtn.setBounds(barsRow.removeFromRight(barsRow.getWidth() / 3));
+            barsRow.removeFromRight(4);
+            barsBox.setBounds(barsRow);
+        }
         mutateButton.setBounds(colB.removeFromTop(26));
 
         colA.removeFromTop(6);

@@ -106,15 +106,53 @@ juce::File CurveEditor::curveDir()
     return dir;
 }
 
+// ============================================================================
+//  ファクトリーカーブ一覧
+//   ※ 並び順 = ID。カテゴリは連続した範囲を指すので、
+//     追加するときは必ずカテゴリの「中」へ入れ、curveCategories() の
+//     first/count も合わせて更新すること。
+//   ※ IDはプリセット等に保存されないため、並べ替えても互換性は壊れない。
+// ============================================================================
 juce::StringArray CurveEditor::factoryCurveNames()
 {
-    return { "Linear Up", "Linear Down", "Exp Up (Soft)", "Exp Up (Hard)", "Log Up",
-             "Exp Down", "Log Down", "S-Curve Up", "S-Curve Down", "Ramp + Hold",
-             "Hold + Ramp", "Triangle", "V Shape",
-             "Steps 4", "Steps 8", "Steps 16", "Steps 32",
-             "Saw 4", "Saw 8", "Saw 16", "Saw 32",
-             "Pulse 4", "Pulse 8", "Pulse 16", "Pulse 32",
-             "Zigzag Up", "Flat Center", "Flat Max" };
+    return {
+        // --- Basic (0-3) ---
+        "Linear Up", "Linear Down", "Flat Center", "Flat Max",
+        // --- Curved (4-10) ---
+        "Exp Up (Soft)", "Exp Up (Hard)", "Log Up",
+        "Exp Down", "Log Down", "S-Curve Up", "S-Curve Down",
+        // --- Shape (11-16) ---
+        "Ramp + Hold", "Hold + Ramp", "Triangle", "V Shape",
+        "Double Peak", "Punch In",
+        // --- Steps (17-23) ---
+        "Steps 4", "Steps 8", "Steps 16", "Steps 32",
+        "Steps Accel", "Steps Decel", "Exp Stairs",
+        // --- Saw / Gate (24-31) ---
+        "Saw 4", "Saw 8", "Saw 16", "Saw 32", "Saw Accel",
+        "Gate 50%", "Gate 25%", "Gate 12%",
+        // --- Pulse (32-35) ---
+        "Pulse 4", "Pulse 8", "Pulse 16", "Pulse 32",
+        // --- Motion (36-43) ---
+        "Zigzag Up", "Bounce", "Reverse Bounce", "Elastic Overshoot",
+        "Trill", "Swell x3", "Sine 1", "Sine 2",
+        // --- Random (44-46) ---
+        "Random Steps 8", "Random Steps 16", "Chaos Walk"
+    };
+}
+
+const std::vector<CurveEditor::CurveCategory>& CurveEditor::curveCategories()
+{
+    static const std::vector<CurveCategory> c = {
+        { "Basic",       0,  4 },
+        { "Curved",      4,  7 },
+        { "Shape",      11,  6 },
+        { "Steps",      17,  7 },
+        { "Saw / Gate", 24,  8 },
+        { "Pulse",      32,  4 },
+        { "Motion",     36,  8 },
+        { "Random",     44,  3 },
+    };
+    return c;
 }
 
 CurveSnapshot CurveEditor::makeFactoryCurve(int id)
@@ -158,39 +196,198 @@ CurveSnapshot CurveEditor::makeFactoryCurve(int id)
         }
     };
 
+    // ---- 追加ジェネレーター ----
+
+    // 幅が変化していく段階状 (exp>1 で加速 / <1 で減速)
+    auto stepsWarp = [&add](int n, float exp)
+    {
+        for (int k = 0; k < n; ++k)
+        {
+            const float x0 = std::pow((float)k / (float)n, exp);
+            const float x1 = std::pow((float)(k + 1) / (float)n, exp);
+            const float lv = (float)k / (float)(n - 1);
+            add(x0, lv);
+            add(juce::jmax(x0 + 0.002f, x1 - 0.004f), lv);
+        }
+        add(1, 1);
+    };
+
+    // デューティ比を指定できるゲート (n周期, duty=Highの割合)
+    auto gate = [&add](int n, float duty)
+    {
+        const float eps = 0.004f;
+        for (int k = 0; k < n; ++k)
+        {
+            const float a = (float)k / (float)n;
+            const float b = a + duty / (float)n;
+            const float c = (float)(k + 1) / (float)n;
+            add(a, 1);
+            add(juce::jmax(a + eps, b - eps), 1);
+            add(b, 0);
+            add(juce::jmax(b + eps, c - eps), 0);
+        }
+    };
+
+    // 幅が詰まっていくノコギリ
+    auto sawWarp = [&add](int n, float exp)
+    {
+        for (int k = 0; k < n; ++k)
+        {
+            const float x0 = std::pow((float)k / (float)n, exp);
+            const float x1 = std::pow((float)(k + 1) / (float)n, exp);
+            add(x0, 0);
+            add(juce::jmax(x0 + 0.002f, x1 - 0.004f), 1);
+        }
+    };
+
+    // サイン波 (cycles周期)。バイポーラ系カーブの基本形
+    auto sine = [&add](int cycles)
+    {
+        const int n = juce::jlimit(16, 96, cycles * 24);
+        for (int k = 0; k <= n; ++k)
+        {
+            const float t = (float)k / (float)n;
+            add(t, 0.5f + 0.5f * std::sin(t * (float)cycles
+                                          * juce::MathConstants<float>::twoPi));
+        }
+    };
+
+    // 決定論的な擬似乱数 (毎回同じ形が出るよう固定シードのLCG)
+    juce::uint32 rng = 0x1234567u;
+    auto nextRand = [&rng]() noexcept
+    {
+        rng = rng * 1664525u + 1013904223u;
+        return (float)((rng >> 8) & 0xffff) / 65535.0f;
+    };
+
     switch (id)
     {
-    case 0:  add(0, 0);        add(1, 1); break;                       // Linear Up
-    case 1:  add(0, 1);        add(1, 0); break;                       // Linear Down
-    case 2:  add(0, 0, 0.45f); add(1, 1); break;                       // Exp Up Soft
-    case 3:  add(0, 0, 0.8f);  add(1, 1); break;                       // Exp Up Hard
-    case 4:  add(0, 0, -0.5f); add(1, 1); break;                       // Log Up
-    case 5:  add(0, 1, 0.45f); add(1, 0); break;                       // Exp Down
-    case 6:  add(0, 1, -0.5f); add(1, 0); break;                       // Log Down
-    case 7:  add(0, 0, 0.5f);  add(0.5f, 0.5f, -0.5f); add(1, 1); break; // S Up
-    case 8:  add(0, 1, 0.5f);  add(0.5f, 0.5f, -0.5f); add(1, 0); break; // S Down
-    case 9:  add(0, 0, 0.3f);  add(0.6f, 1); add(1, 1); break;         // Ramp+Hold
-    case 10: add(0, 0);        add(0.4f, 0, 0.5f); add(1, 1); break;   // Hold+Ramp
-    case 11: add(0, 0);        add(0.5f, 1); add(1, 0); break;         // Triangle
-    case 12: add(0, 1);        add(0.5f, 0); add(1, 1); break;         // V Shape
-    case 13: steps(4);  break;
-    case 14: steps(8);  break;
-    case 15: steps(16); break;
-    case 16: steps(32); break;
-    case 17: saw(4);  break;
-    case 18: saw(8);  break;
-    case 19: saw(16); break;
-    case 20: saw(32); break;
-    case 21: pulse(4);  break;
-    case 22: pulse(8);  break;
-    case 23: pulse(16); break;
-    case 24: pulse(32); break;
-    case 25: // Zigzag Up
+    // ---- Basic ----
+    case 0:  add(0, 0);        add(1, 1); break;                        // Linear Up
+    case 1:  add(0, 1);        add(1, 0); break;                        // Linear Down
+    case 2:  add(0, 0.5f);     add(1, 0.5f); break;                     // Flat Center
+    case 3:  add(0, 1);        add(1, 1); break;                        // Flat Max
+
+    // ---- Curved ----
+    case 4:  add(0, 0, 0.45f); add(1, 1); break;                        // Exp Up Soft
+    case 5:  add(0, 0, 0.8f);  add(1, 1); break;                        // Exp Up Hard
+    case 6:  add(0, 0, -0.5f); add(1, 1); break;                        // Log Up
+    case 7:  add(0, 1, 0.45f); add(1, 0); break;                        // Exp Down
+    case 8:  add(0, 1, -0.5f); add(1, 0); break;                        // Log Down
+    case 9:  add(0, 0, 0.5f);  add(0.5f, 0.5f, -0.5f); add(1, 1); break; // S Up
+    case 10: add(0, 1, 0.5f);  add(0.5f, 0.5f, -0.5f); add(1, 0); break; // S Down
+
+    // ---- Shape ----
+    case 11: add(0, 0, 0.3f);  add(0.6f, 1); add(1, 1); break;          // Ramp+Hold
+    case 12: add(0, 0);        add(0.4f, 0, 0.5f); add(1, 1); break;    // Hold+Ramp
+    case 13: add(0, 0);        add(0.5f, 1); add(1, 0); break;          // Triangle
+    case 14: add(0, 1);        add(0.5f, 0); add(1, 1); break;          // V Shape
+    case 15: // Double Peak — 一度上がって落ち、さらに高く上がる
+        add(0, 0, 0.3f); add(0.32f, 0.85f, -0.2f); add(0.5f, 0.42f, 0.35f); add(1, 1);
+        break;
+    case 16: // Punch In — 頭で一撃、落として再上昇
+        add(0, 1); add(0.04f, 1); add(0.12f, 0.35f, 0.4f); add(1, 1);
+        break;
+
+    // ---- Steps ----
+    case 17: steps(4);  break;
+    case 18: steps(8);  break;
+    case 19: steps(16); break;
+    case 20: steps(32); break;
+    case 21: stepsWarp(12, 1.9f); break;   // Steps Accel — 終盤ほど段が細かい
+    case 22: stepsWarp(12, 0.55f); break;  // Steps Decel — 序盤ほど段が細かい
+    case 23: // Exp Stairs — 段の高さが指数的に伸びる
+        for (int k = 0; k < 8; ++k)
+        {
+            const float lv = std::pow((float)k / 7.0f, 2.0f);
+            add((float)k / 8.0f, lv);
+            add((float)(k + 1) / 8.0f - 0.006f, lv);
+        }
+        add(1, 1);
+        break;
+
+    // ---- Saw / Gate ----
+    case 24: saw(4);  break;
+    case 25: saw(8);  break;
+    case 26: saw(16); break;
+    case 27: saw(32); break;
+    case 28: sawWarp(10, 1.9f); break;     // Saw Accel
+    case 29: gate(8, 0.50f); break;
+    case 30: gate(8, 0.25f); break;
+    case 31: gate(8, 0.12f); break;
+
+    // ---- Pulse ----
+    case 32: pulse(4);  break;
+    case 33: pulse(8);  break;
+    case 34: pulse(16); break;
+    case 35: pulse(32); break;
+
+    // ---- Motion ----
+    case 36: // Zigzag Up
         add(0, 0); add(0.2f, 0.5f); add(0.4f, 0.25f);
         add(0.6f, 0.75f); add(0.8f, 0.5f); add(1, 1);
         break;
-    case 26: add(0, 0.5f); add(1, 0.5f); break;                        // Flat Center
-    default: add(0, 1);    add(1, 1); break;                           // Flat Max
+    case 37: // Bounce — 到達後に減衰しながら跳ねる
+        add(0, 0, 0.5f);
+        add(0.40f, 1.0f); add(0.52f, 0.62f, 0.3f);
+        add(0.66f, 1.0f); add(0.76f, 0.80f, 0.3f);
+        add(0.86f, 1.0f); add(0.92f, 0.92f, 0.3f);
+        add(1, 1);
+        break;
+    case 38: // Reverse Bounce — 落下しながら跳ねる (Downer向け)
+        add(0, 1, 0.5f);
+        add(0.40f, 0.0f); add(0.52f, 0.38f, 0.3f);
+        add(0.66f, 0.0f); add(0.76f, 0.20f, 0.3f);
+        add(0.86f, 0.0f); add(0.92f, 0.08f, 0.3f);
+        add(1, 0);
+        break;
+    case 39: // Elastic Overshoot — 行き過ぎてから落ち着く
+        add(0, 0, 0.6f);
+        add(0.55f, 1.00f); add(0.66f, 0.66f); add(0.76f, 0.90f);
+        add(0.85f, 0.74f); add(0.93f, 0.84f); add(1, 0.80f);
+        break;
+    case 40: // Trill — 振れ幅が広がっていく細かい往復
+        for (int k = 0; k <= 24; ++k)
+        {
+            const float t = (float)k / 24.0f;
+            const float amp = 0.06f + 0.44f * t;
+            add(t, juce::jlimit(0.0f, 1.0f, 0.5f + ((k % 2) ? amp : -amp)));
+        }
+        break;
+    case 41: // Swell x3 — 3段階でせり上がる
+        add(0, 0, 0.3f);   add(0.22f, 0.42f, -0.3f); add(0.33f, 0.16f, 0.3f);
+        add(0.58f, 0.72f, -0.3f); add(0.68f, 0.44f, 0.3f);
+        add(1, 1);
+        break;
+    case 42: sine(1); break;
+    case 43: sine(2); break;
+
+    // ---- Random (固定シードなので毎回同じ形) ----
+    case 44:
+    case 45:
+    {
+        const int n = (id == 44) ? 8 : 16;
+        for (int k = 0; k < n; ++k)
+        {
+            const float lv = 0.08f + nextRand() * 0.84f;
+            add((float)k / (float)n, lv);
+            add((float)(k + 1) / (float)n - 0.004f, lv);
+        }
+        add(1, 1);
+        break;
+    }
+    case 46: // Chaos Walk — なめらかなランダムウォーク
+    {
+        float y = 0.5f;
+        for (int k = 0; k <= 24; ++k)
+        {
+            add((float)k / 24.0f, juce::jlimit(0.02f, 0.98f, y));
+            y += (nextRand() - 0.5f) * 0.34f;
+        }
+        break;
+    }
+
+    default: add(0, 0); add(1, 1); break;
     }
 
     s.pts[0].x = 0.0f;
@@ -202,8 +399,15 @@ void CurveEditor::showPresetMenu()
 {
     juce::PopupMenu m;
     const auto names = factoryCurveNames();
-    for (int i = 0; i < names.size(); ++i)
-        m.addItem(1 + i, names[i]);
+
+    // カテゴリごとのサブメニュー (47種を1枚に並べると選びづらいため)
+    for (const auto& cat : curveCategories())
+    {
+        juce::PopupMenu sub;
+        for (int i = cat.first; i < cat.first + cat.count && i < names.size(); ++i)
+            sub.addItem(1 + i, names[i]);
+        m.addSubMenu(cat.name, sub);
+    }
 
     // ユーザー保存カーブ
     auto files = curveDir().findChildFiles(juce::File::findFiles, false, "*.crv");
