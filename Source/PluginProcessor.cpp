@@ -64,10 +64,25 @@ namespace
     }
 }
 
+// ============================================================================
+//  グローバル設定へのアクセス
+//
+//  ※ わざとリークさせている (Meyers の "leaky singleton")。
+//
+//  juce::PropertiesFile は ChangeBroadcaster (内部に AsyncUpdater) と Timer を
+//  継承している。関数ローカル static にすると破棄が atexit まで遅延し、
+//  そのときには JUCE の MessageManager / TimerThread が既に落ちているため、
+//  ~AsyncUpdater / ~Timer が消滅済みのオブジェクトをロックしにいって
+//  アクセス違反になる (スタンドアローンを閉じたときのクラッシュ)。
+//
+//  値の書き込み側は必ず saveIfNeeded() を呼んでいるので、
+//  デストラクタを走らせなくても設定は失われない。
+//  プロセス終了と同時に消えるだけの小さなオブジェクトなので実害も無い。
+// ============================================================================
 juce::PropertiesFile& LiftXAudioProcessor::getGlobalSettings()
 {
-    static GlobalSettingsHolder holder;
-    return *holder.props.getUserSettings();
+    static GlobalSettingsHolder* holder = new GlobalSettingsHolder();
+    return *holder->props.getUserSettings();
 }
 
 juce::String LiftXAudioProcessor::getGlobalWavetableDir()

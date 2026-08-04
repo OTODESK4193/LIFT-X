@@ -59,7 +59,7 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
 
     // BARS ロック (RANDOM で小節数を変えたくないとき)
     lockBarsBtn.setClickingTogglesState(true);
-    lockBarsBtn.setTooltip("Lock BARS from RANDOM");
+    lockBarsBtn.setTooltip("Lock BARS from RANDOM (same idea as LOCK OSC / LOCK ENV)");
     lockBarsBtn.setColour(juce::TextButton::buttonOnColourId,
                           LiftColors::peach.withAlpha(0.45f));
     addAndMakeVisible(lockBarsBtn);

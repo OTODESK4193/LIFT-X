@@ -106,7 +106,7 @@ private:
     // ロック: RANDOM の対象からOSC/カーブを外す
     std::unique_ptr<GlowToggle> lockOscBtn, lockCurveBtn;
     // BARS ロック: コンボの右隣に置く小さなトグル (幅が狭いので LED 無しの TextButton)
-    juce::TextButton lockBarsBtn { "R" };
+    juce::TextButton lockBarsBtn { "L" };
     ProgressStrip progressStrip;
     RiserWaveStrip waveStrip;
 

@@ -1,6 +1,6 @@
 # LIFT-X
 
-![Release](https://img.shields.io/badge/release-v0.6.1-blue)
+![Release](https://img.shields.io/badge/release-v1.0.0-blue)
 ![License](https://img.shields.io/badge/license-AGPLv3-green)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -118,7 +118,7 @@ Eleven categories with **twelve or more each** — EDM, Trance, Bass, Techno, Ci
 | **REVERSE** | on/off | Reads every curve backwards — riser ↔ downer |
 | **RANDOM** | button | Randomises MAIN and OSC ENV only, never Master/FX/Config |
 | **MUTATE** | button | Nudges the current sound (Shift = larger jump) |
-| **R** (next to BARS) | toggle | Locks BARS from RANDOM |
+| **L** (next to BARS) | toggle | Locks BARS from RANDOM |
 | **LOCK OSC / LOCK ENV** | toggle | Excludes oscillators / curves from RANDOM |
 | **BARS** | 1/32 … 16 | Length of one full 0→1 sweep (10 steps) |
 | **ATTACK** | 0.1–500 ms | Amp envelope attack |
@@ -309,7 +309,7 @@ cmake --build build --config Release
 * **Make noise sing.** Set a filter to **Comb**, route only NOISE to it, and turn Scale Quantize on. The noise picks up a pitch and walks up the scale — a texture you cannot get from a band-pass.
 * **Talking risers.** Set a filter to **Vowel** and give it a Filter curve that goes low → high → mid. The formants read as "aa-ee-oh" instead of a filter sweep.
 * **Widen without chorus.** Give OSC 1 a Pan curve that travels left→right and OSC 2 the mirror image. The stereo image opens as the riser climbs, and it stays mono-compatible because the pan law is equal power.
-* **Explore, don't reroll.** When a patch is nearly right, press **MUTATE** repeatedly instead of RANDOM. Lock BARS with the small **R** button so the length stays glued to your arrangement.
+* **Explore, don't reroll.** When a patch is nearly right, press **MUTATE** repeatedly instead of RANDOM. Lock BARS with the small **L** button so the length stays glued to your arrangement.
 
 
 ## License
