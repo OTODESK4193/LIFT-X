@@ -90,6 +90,7 @@ public:
                           "keys to the closest scale note - you can freely edit them afterwards.",
                           juce::dontSendNotification);
         scaleInfo.setJustificationType(juce::Justification::topLeft);
+        scaleInfo.setMinimumHorizontalScale(1.0f);   // 字を詰めずに折り返す
         addAndMakeVisible(scaleInfo);
 
         // ================= KEY FOLLOW / VELOCITY =================
@@ -118,6 +119,7 @@ public:
             "riser is not perfectly mechanical. 0% = off.",
             juce::dontSendNotification);
         playInfo.setJustificationType(juce::Justification::topLeft);
+        playInfo.setMinimumHorizontalScale(1.0f);
         addAndMakeVisible(playInfo);
 
         // ---- リミッター ----
@@ -134,6 +136,8 @@ public:
         limInfo.setText("Brickwall: instant attack, zero latency (no PDC). "
                         "Output never exceeds CEILING.",
                         juce::dontSendNotification);
+        limInfo.setJustificationType(juce::Justification::topLeft);
+        limInfo.setMinimumHorizontalScale(1.0f);
         addAndMakeVisible(limInfo);
 
         // ---- カラーテーマ ----
@@ -209,7 +213,7 @@ public:
         auto rightCol = r;
 
         // ================= 左: スケール量子化 =================
-        scaleArea = leftCol.removeFromTop(196);
+        scaleArea = leftCol.removeFromTop(245);
         {
             auto sc = scaleArea.reduced(14, 12);
 
@@ -239,10 +243,10 @@ public:
             scaleInfo.setBounds(sc);
         }
 
-        leftCol.removeFromTop(28);
+        leftCol.removeFromTop(14);
 
         // ================= 左: KEY FOLLOW / VELOCITY =================
-        playArea = leftCol.removeFromTop(206);
+        playArea = leftCol.removeFromTop(288);
         {
             auto pa = playArea.reduced(14, 12);
 
@@ -251,7 +255,7 @@ public:
             keyFollowBox.setBounds(kfRow.removeFromTop(26).removeFromLeft(190));
 
             pa.removeFromTop(6);
-            auto velRow = pa.removeFromTop(96);
+            auto velRow = pa.removeFromTop(90);
             ValueKnob* vk[4] = { &velCutKnob, &velNoiseKnob, &velDriveKnob, &humanizeKnob };
             juce::Label* vl[4] = { &velCutLabel, &velNoiseLabel, &velDriveLabel, &humanizeLabel };
             const int vw = velRow.getWidth() / 4;
