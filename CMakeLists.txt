@@ -150,7 +150,7 @@ target_compile_definitions(LIFTX PRIVATE
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
-    LIFTX_VERSION="V1.0.1B003"
+    LIFTX_VERSION="V1.0.1B004"
 )
 
 # ----------------------------------------------------------------------------

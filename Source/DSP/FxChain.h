@@ -394,7 +394,7 @@ namespace lfx
         //    古い内容が残っていても数十msで自然に流れ出る。クリア対象外でよい。
         void clearStep() noexcept
         {
-            constexpr int kChunk = 64;
+            constexpr int kChunk = 256; // キャッシュラインに合わせた効率的なチャンクサイズ
 
             if (clearCh == 0 && clearIdx == 0)
             {
@@ -410,8 +410,7 @@ namespace lfx
             if (n <= 0) { ++clearCh; return; }
 
             const int end = juce::jmin(n, clearIdx + kChunk);
-            for (int i = clearIdx; i < end; ++i)
-                buf[(size_t)i] = 0.0f;
+            std::fill(buf.begin() + clearIdx, buf.begin() + end, 0.0f);
 
             clearIdx = end;
             if (clearIdx >= n)

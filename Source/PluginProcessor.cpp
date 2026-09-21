@@ -169,6 +169,14 @@ void LiftXAudioProcessor::parameterChanged(const juce::String&, float)
 
 void LiftXAudioProcessor::timerCallback()
 {
+    // カスタム波形の定期ガベージコレクション (約5秒に1回: 25Hz × 125 = 5s)
+    if (++mGcCounter >= 125)
+    {
+        mGcCounter = 0;
+        for (auto& wt : mWavetables)
+            wt.collectGarbage();
+    }
+
     // メッセージスレッド。パラメーターの書き換えはここでのみ行う。
     if (!mSnapDirty.exchange(false, std::memory_order_acquire))
         return;
@@ -1344,6 +1352,7 @@ void LiftXAudioProcessor::clearCustomWavetable(int oscIdx)
 {
     oscIdx = juce::jlimit(0, RiserEngine::kNumOscs - 1, oscIdx);
     mWavetables[(size_t)oscIdx].clearCustom();
+    mWavetables[(size_t)oscIdx].collectGarbage();
     apvts.state.removeProperty("customWavetablePath" + juce::String(oscIdx + 1), nullptr);
 }
 

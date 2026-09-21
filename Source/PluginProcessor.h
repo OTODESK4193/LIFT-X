@@ -230,6 +230,7 @@ private:
 
     // ---- DSPモジュール ----
     std::array<MorphWavetable, RiserEngine::kNumOscs> mWavetables;
+    int mGcCounter = 0;
     RiserEngine mEngine;
     FxChain mFx;
     BrickLimiter mLimiter;

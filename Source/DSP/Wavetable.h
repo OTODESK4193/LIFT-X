@@ -150,6 +150,22 @@ public:
     void clearCustom() noexcept { mCustom.store(nullptr, std::memory_order_release); }
     bool hasCustom() const noexcept { return mCustom.load(std::memory_order_relaxed) != nullptr; }
 
+    // メッセージスレッド用: 現在アクティブでない古いテーブルを解放 (ガベージコレクション)
+    void collectGarbage() noexcept
+    {
+        const auto* active = mCustom.load(std::memory_order_acquire);
+        if (mAllSets.size() <= 1 && (mAllSets.empty() || mAllSets.front().get() == active))
+            return;
+
+        std::vector<std::unique_ptr<CustomSet>> survivors;
+        for (auto& s : mAllSets)
+        {
+            if (s.get() == active)
+                survivors.push_back(std::move(s));
+        }
+        mAllSets = std::move(survivors);
+    }
+
     // GUI波形表示用: morphPos位置の波形を n 点へ縮小して書き出す (メッセージスレッド用)
     //  allowCustom=false でビルトイン波形を強制 (LIFT-X: WAVEコンボがビルトイン選択時)
     void getDisplayWave(float morphPos, float* out, int n, bool allowCustom = true) const

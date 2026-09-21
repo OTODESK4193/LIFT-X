@@ -530,11 +530,11 @@ public:
             {
                 panSm[(size_t)s] += smCoef * (panTarget[(size_t)s] - panSm[(size_t)s]);
                 const float th = (panSm[(size_t)s] * 0.5f + 0.5f) * juce::MathConstants<float>::halfPi;
-                const float pl = std::cos(th) * juce::MathConstants<float>::sqrt2;
-                const float pr = std::sin(th) * juce::MathConstants<float>::sqrt2;
+                const float pl = std::cos(th);
+                const float pr = std::sin(th);
 
-                busL[s][i] += srcL[(size_t)s] * g * pl * 0.70710678f;
-                busR[s][i] += srcR[(size_t)s] * g * pr * 0.70710678f;
+                busL[s][i] += srcL[(size_t)s] * g * pl;
+                busR[s][i] += srcR[(size_t)s] * g * pr;
             }
         }
 
