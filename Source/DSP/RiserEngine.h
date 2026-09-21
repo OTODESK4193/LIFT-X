@@ -221,6 +221,7 @@ public:
         levelTarget.fill(0.0f);
         panTarget.fill(0.0f);
         panSm.fill(0.0f);
+        oscPosTarget.fill(0.0f);
         posSm.fill(0.0f);
         detSm.fill(12.0f);
         sprSm.fill(0.7f);
@@ -439,8 +440,8 @@ public:
                 const int uni = juce::jlimit(1, kMaxUnison, po.unison);
                 const float norm = levelSm[(size_t)o] / std::sqrt((float)uni);
 
-                // POSITION はサンプル単位平滑 (ノブ操作時のジッパー防止)
-                posSm[(size_t)o] += smCoef * (po.pos - posSm[(size_t)o]);
+                // POSITION はサンプル単位平滑 (ノブ操作およびENVカーブ更新段差の完全平滑化)
+                posSm[(size_t)o] += smCoef * (oscPosTarget[(size_t)o] - posSm[(size_t)o]);
                 const bool useCustom = (po.waveMode == CustomWT);
                 const float morph = useCustom ? posSm[(size_t)o] : (float)po.waveMode * 0.25f;
 
@@ -642,6 +643,10 @@ private:
             levelTarget[(size_t)o] = juce::jlimit(0.0f, 1.0f,
                 po.level + bip(CurveStore::oscCurve(o, 1)) * 1.0f);
 
+            // POSITION: バイポーラ加算・フルレンジ (中央=ノブ値, 上端=+1.0, 下端=-1.0, 0..1クランプ)
+            oscPosTarget[(size_t)o] = juce::jlimit(0.0f, 1.0f,
+                po.pos + bip(CurveStore::posCurve(o)) * 1.0f);
+
             // DETUNE: ±100ct / SPREAD: ±1.0 (フルレンジ, ティックレート平滑)
             const float detTgt = juce::jlimit(0.0f, 100.0f,
                 po.detune + bip(CurveStore::oscCurve(o, 2)) * 100.0f);
@@ -787,7 +792,7 @@ private:
             levelSm = levelTarget;
             panSm   = panTarget;
             for (int o = 0; o < kNumOscs; ++o)
-                posSm[(size_t)o] = p.osc[(size_t)o].pos;
+                posSm[(size_t)o] = oscPosTarget[(size_t)o];
         }
     }
 
@@ -880,6 +885,7 @@ private:
     // PAN ENV (-1=L .. +1=R)。サンプル単位平滑で定位移動のジッパーを防ぐ
     std::array<float, kNumSources> panTarget {};
     std::array<float, kNumSources> panSm {};
+    std::array<float, kNumOscs> oscPosTarget {};
     std::array<float, kNumOscs> posSm {};
     std::array<float, kNumOscs> detSm {};
     std::array<float, kNumOscs> sprSm {};

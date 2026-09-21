@@ -111,7 +111,7 @@ private:
     RiserWaveStrip waveStrip;
 
     // ModBand用パラメーターキャッシュ
-    std::array<juce::RangedAudioParameter*, 3> prmOscLevel {}, prmOscDet {},
+    std::array<juce::RangedAudioParameter*, 3> prmOscPos {}, prmOscLevel {}, prmOscDet {},
                                               prmOscSpread {}, prmOscPan {};
     juce::RangedAudioParameter* prmNoiseLevel = nullptr;
     juce::RangedAudioParameter* prmNoiseRes = nullptr;
@@ -143,8 +143,32 @@ private:
     KnobCell noiseLevel, noisePitch, noiseRes, noiseRange, noisePan;
 
     // ---- マスターエリア (ノイズ列の下) ----
+    class PanicButton : public juce::TextButton
+    {
+    public:
+        PanicButton() : juce::TextButton("PANIC") {}
+
+        void paintButton(juce::Graphics& g, bool highlighted, bool down) override
+        {
+            const auto r = getLocalBounds().toFloat().reduced(0.5f);
+            const auto col = LiftColors::rose;
+
+            g.setColour(down ? col.withAlpha(0.35f)
+                             : (highlighted ? col.withAlpha(0.22f) : col.withAlpha(0.12f)));
+            g.fillRoundedRectangle(r, 4.0f);
+
+            g.setColour(down ? col : (highlighted ? col.withAlpha(0.95f) : col.withAlpha(0.55f)));
+            g.drawRoundedRectangle(r, 4.0f, highlighted || down ? 1.5f : 1.0f);
+
+            g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+            g.setColour(down ? LiftColors::text : (highlighted ? LiftColors::text : col));
+            g.drawText("! PANIC !", getLocalBounds(), juce::Justification::centred);
+        }
+    };
+
     juce::Label masterTitle;
     KnobCell ceilCell;   // Limiter Ceiling (masterCell=OUTと並ぶ)
+    PanicButton panicBtn;
 
     // ---- MIDIラーン ----
     juce::String armedParamId;          // 空=非武装

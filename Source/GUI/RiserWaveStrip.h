@@ -24,6 +24,57 @@ class RiserWaveStrip : public juce::Component,
                        private juce::Timer
 {
 public:
+    // ---- 点灯式トグルボタン (LED + グロー枠) ----
+    class NormToggle : public juce::ToggleButton
+    {
+    public:
+        NormToggle() : juce::ToggleButton("NORM") {}
+
+        void paintButton(juce::Graphics& g, bool highlighted, bool /*down*/) override
+        {
+            const auto r = getLocalBounds().toFloat().reduced(0.5f);
+            const bool on = getToggleState();
+
+            // 背景
+            g.setColour(on ? LiftColors::mint.withAlpha(0.18f)
+                           : (highlighted ? LiftColors::knobTrack.brighter(0.12f) : LiftColors::knobTrack));
+            g.fillRoundedRectangle(r, 4.0f);
+
+            // 枠
+            g.setColour(on ? LiftColors::mint.withAlpha(0.90f) : LiftColors::panelLine);
+            g.drawRoundedRectangle(r, 4.0f, on ? 1.2f : 1.0f);
+
+            // LED インジケーター (左側)
+            const float ledX = r.getX() + 7.5f;
+            const float ledY = r.getCentreY();
+            if (on)
+            {
+                // LED グロー
+                g.setColour(LiftColors::mint.withAlpha(0.35f));
+                g.fillEllipse(ledX - 5.0f, ledY - 5.0f, 10.0f, 10.0f);
+                // LED コア
+                g.setColour(LiftColors::mint);
+                g.fillEllipse(ledX - 2.5f, ledY - 2.5f, 5.0f, 5.0f);
+                // コアハイライト
+                g.setColour(juce::Colours::white.withAlpha(0.7f));
+                g.fillEllipse(ledX - 1.0f, ledY - 1.0f, 2.0f, 2.0f);
+            }
+            else
+            {
+                // 消灯 LED
+                g.setColour(LiftColors::textDim.withAlpha(0.35f));
+                g.fillEllipse(ledX - 2.0f, ledY - 2.0f, 4.0f, 4.0f);
+            }
+
+            // テキスト "NORM"
+            g.setColour(on ? LiftColors::text : LiftColors::textDim);
+            g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+            g.drawText("NORM", (int)(ledX + 6.0f), 0,
+                       getWidth() - (int)(ledX + 7.0f), getHeight(),
+                       juce::Justification::centred);
+        }
+    };
+
     explicit RiserWaveStrip(LiftXAudioProcessor& p)
         : proc(p)
     {
@@ -52,7 +103,7 @@ public:
     void resized() override
     {
         auto r = getLocalBounds().reduced(5, 4);
-        normBtn.setBounds(r.removeFromTop(15).removeFromRight(46));
+        normBtn.setBounds(r.removeFromTop(16).removeFromRight(54));
     }
 
     void paint(juce::Graphics& g) override
@@ -136,7 +187,7 @@ public:
             g.setColour(LiftColors::text.withAlpha(0.85f));
             const double sec = peakLen / juce::jmax(1.0, proc.getPreparedSampleRate());
             g.drawText("DRAG > WAV  " + juce::String(sec, 1) + "s",
-                       getLocalBounds().reduced(8, 2).withTrimmedRight(52),
+                       getLocalBounds().reduced(8, 2).withTrimmedRight(60),
                        juce::Justification::topRight);
         }
     }
@@ -307,7 +358,7 @@ private:
 
     std::vector<float> ownL, ownR;
     juce::Path wavePath;
-    juce::TextButton normBtn { "NORM" };
+    NormToggle normBtn;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RiserWaveStrip)
 };

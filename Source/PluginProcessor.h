@@ -136,6 +136,9 @@ public:
     // ENV評価位置 (GUIのプレイヘッド/ModBand用): Auto=Progress / Manual=LIFTノブ
     float getEnvPosition() const noexcept;
 
+    // ---- PANIC: 全音停止 & FXバッファ/ディレイ/リバーブ即時クリア ----
+    void triggerPanic() noexcept { mPanicRequested.store(true, std::memory_order_relaxed); }
+
     // ---- プリセット (メッセージスレッド専用) ----
     static juce::File getUserPresetDir();
     void saveUserPreset(const juce::String& name, const juce::String& subCategory);
@@ -212,6 +215,8 @@ private:
     SnapState mLastSnapState;
     // オーディオスレッドから立てられ、メッセージスレッドで消費される
     std::atomic<bool> mSnapDirty { false };
+    // GUI/Panicボタンから立てられ、オーディオスレッドで消費される
+    std::atomic<bool> mPanicRequested { false };
 
     // ---- BARS ロック (メッセージスレッド専用) ----
     //  captureBars() で読み込み前の値を控え、restoreBars() で書き戻す。

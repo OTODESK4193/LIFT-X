@@ -200,6 +200,8 @@ namespace LiftColors
         if (idx < 15) return lilac;                    // ノイズ
         if (idx < 23) return babyBlue;                 // フィルター (Cutoff/Res)
         if (idx < 35) return peach;                    // FX
-        return rose;                                   // PAN
+        if (idx < 39) return rose;                     // PAN
+        if (idx < 41) return peach;                    // Stutter
+        return mint;                                   // OSC POSITION (mint)
     }
 }

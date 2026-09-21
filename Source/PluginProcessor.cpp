@@ -633,6 +633,18 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
     buffer.clear();
 
+    // ---- PANIC (全音停止 & FXバッファ/ディレイ/リバーブ即時クリア) ----
+    if (mPanicRequested.exchange(false, std::memory_order_relaxed))
+    {
+        mEngine.hardReset();
+        mFx.prepare(mPreparedSampleRate);
+        mLimiter.prepare(mPreparedSampleRate);
+        mCapturing = false;
+        mCapInTail = false;
+        mCapActive.store(false, std::memory_order_relaxed);
+        return;
+    }
+
     // ---- トランスポート情報 ----
     bool playing = false, hasPpq = false;
     double ppq = 0.0, bpm = 120.0, qnPerBar = 4.0;

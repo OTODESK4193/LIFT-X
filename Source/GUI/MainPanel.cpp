@@ -202,6 +202,10 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     setupKnob(masterCell, "OUT", "master", LiftColors::IdPink);
     setupKnob(ceilCell, "CEILING", "limCeiling", LiftColors::IdPink);
 
+    panicBtn.setTooltip("Stop all sound, reset oscillators, and clear all FX buffers immediately");
+    panicBtn.onClick = [this] { proc.triggerPanic(); };
+    addAndMakeVisible(panicBtn);
+
     // ---- ブラウザ (最前面オーバーレイ) ----
     addChildComponent(browser);
     browser.onLoaded = [this]
@@ -214,10 +218,11 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
     for (int i = 0; i < 3; ++i)
     {
         const juce::String n(i + 1);
+        prmOscPos[(size_t)i]   = proc.apvts.getParameter("osc" + n + "Pos");
         prmOscLevel[(size_t)i] = proc.apvts.getParameter("osc" + n + "Level");
-        prmOscDet[(size_t)i] = proc.apvts.getParameter("osc" + n + "Det");
+        prmOscDet[(size_t)i]   = proc.apvts.getParameter("osc" + n + "Det");
         prmOscSpread[(size_t)i] = proc.apvts.getParameter("osc" + n + "Spread");
-        prmOscPan[(size_t)i] = proc.apvts.getParameter("osc" + n + "Pan");
+        prmOscPan[(size_t)i]   = proc.apvts.getParameter("osc" + n + "Pan");
     }
     prmNoiseLevel = proc.apvts.getParameter("noiseLevel");
     prmNoiseRes = proc.apvts.getParameter("noiseRes");
@@ -298,6 +303,9 @@ void MainPanel::updateModBands(float lift, float prog)
     // フルレンジ加算 (中央=ノブ値 / 上端=MAX / 下端=MIN) — DSPと同一スケール
     for (int i = 0; i < 3; ++i)
     {
+        ModBand::update(oscPos[(size_t)i].knob, prmOscPos[(size_t)i],
+                        curves.read(CurveStore::posCurve(i)), lift, prog,
+                        [](float b, float bip) { return juce::jlimit(0.0f, 1.0f, b + bip * 1.0f); });
         ModBand::update(oscLevel[(size_t)i].knob, prmOscLevel[(size_t)i],
                         curves.read(CurveStore::oscCurve(i, 1)), lift, prog,
                         [](float b, float bip) { return b + bip * 1.0f; });
@@ -573,6 +581,9 @@ void MainPanel::resized()
         masterTitle.setBounds(col.removeFromTop(18));
         KnobCell* mcells[2] = { &masterCell, &ceilCell };
         layoutKnobGrid(col.removeFromTop(100), mcells, 2, 2);
+
+        col.removeFromTop(6);
+        panicBtn.setBounds(col.removeFromTop(24).reduced(6, 0));
     }
 
     // ブラウザ: 下段全体を覆うオーバーレイ

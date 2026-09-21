@@ -27,16 +27,15 @@ public:
 
 private:
     void setSource(int idx);   // 0-2=OSC1-3, 3=NOISE
-    void setTarget(int idx);   // 0=PITCH 1=LEVEL 2=DETUNE 3=SPREAD 4=PAN (ノイズ: 2=RES)
+    void setTarget(int idx);   // 0=PITCH 1=LEVEL 2=POSITION 3=DETUNE 4=SPREAD 5=PAN (ノイズ: 2=RES 3=PAN)
     int curveIndex() const;
     void styleTabButton(juce::TextButton& b, bool active, juce::Colour accent);
     void updateHint();
 
     LiftXAudioProcessor& proc;
 
-    // ターゲット: 0=PITCH 1=LEVEL 2=DETUNE(ノイズはRES) 3=SPREAD 4=PAN
-    static constexpr int kNumTargets = 5;
-    static constexpr int kPanTarget  = 4;
+    // ターゲット: 0=PITCH 1=LEVEL 2=POSITION 3=DETUNE 4=SPREAD 5=PAN (ノイズ: 2=RES 3=PAN)
+    static constexpr int kNumTargets = 6;
 
     std::array<std::unique_ptr<juce::TextButton>, 4> srcTabs;            // OSC1-3 / NOISE
     std::array<std::unique_ptr<juce::TextButton>, kNumTargets> tgtTabs;  // ターゲット

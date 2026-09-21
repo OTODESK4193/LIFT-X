@@ -239,13 +239,21 @@ public:
         Osc1Pan = 35, Osc2Pan, Osc3Pan, NoisePan,
         // ---- v0.6 追加: Stutter ----
         StutAmt = 39, StutRate,
-        kNumCurves // = 41
+        // ---- v1.0.1 追加: OSC POSITION ----
+        Osc1Pos = 41, Osc2Pos, Osc3Pos,
+        kNumCurves // = 44
     };
 
     // ソース(0-2=OSC1-3, 3=Noise) → PANカーブ番号
     static int panCurve(int src) noexcept
     {
         return Osc1Pan + juce::jlimit(0, 3, src);
+    }
+
+    // OSCソース(0-2=OSC1-3) → POSITIONカーブ番号
+    static int posCurve(int osc) noexcept
+    {
+        return Osc1Pos + juce::jlimit(0, 2, osc);
     }
 
     // OSCソース(0-2) × ターゲット(0=Pitch 1=Level 2=Detune 3=Spread)
@@ -274,7 +282,8 @@ public:
             "REVERB AMT", "REVERB SHIMMER",
             "DUCK AMT", "DUCK RATE", "DUCK SHAPE",
             "OSC1 PAN", "OSC2 PAN", "OSC3 PAN", "NOISE PAN",
-            "STUTTER AMT", "STUTTER RATE" };
+            "STUTTER AMT", "STUTTER RATE",
+            "OSC1 POSITION", "OSC2 POSITION", "OSC3 POSITION" };
         return names[juce::jlimit(0, kNumCurves - 1, idx)];
     }
 

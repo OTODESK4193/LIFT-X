@@ -28,7 +28,8 @@
 //             32=DuckAmt 33=DuckRate 34=DuckShape
 //             35-38=Pan (OSC1,OSC2,OSC3,Noise)   ← v0.6 追加
 //             39=StutAmt 40=StutRate             ← v0.6 追加
-//             (kNumCurves = 41)
+//             41-43=Pos (OSC1,OSC2,OSC3)         ← v1.0.1 追加
+//             (kNumCurves = 44)
 //
 //   カーブの REPEAT (LFO化) は先頭に "R<n>;" を付ける。
 //    例) "1:R16;0,0.9,0;0.45,0.9,0;0.5,0.1,0;1,0.1,0"  = 16分のゲート
@@ -942,7 +943,8 @@ static_assert(CurveStore::RevAmt     == 30, "FactoryPresets: curve index layout 
 static_assert(CurveStore::DuckAmt    == 32, "FactoryPresets: curve index layout changed");
 static_assert(CurveStore::Osc1Pan    == 35, "FactoryPresets: curve index layout changed");
 static_assert(CurveStore::StutAmt    == 39, "FactoryPresets: curve index layout changed");
-static_assert(CurveStore::kNumCurves == 41, "FactoryPresets: curve count changed");
+static_assert(CurveStore::Osc1Pos    == 41, "FactoryPresets: curve index layout changed");
+static_assert(CurveStore::kNumCurves == 44, "FactoryPresets: curve count changed");
 
 static void applyCurves(LiftXAudioProcessor& proc, const juce::String& s)
 {
