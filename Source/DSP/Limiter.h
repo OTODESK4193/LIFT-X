@@ -17,6 +17,7 @@ public:
     void prepare(double sampleRate)
     {
         sr = juce::jmax(8000.0, sampleRate);
+        atkCoef = (float)(1.0 - std::exp(-1.0 / (0.0005 * sr))); // τ = 0.5ms (トランジェント歪み抑制)
         setRelease(120.0f);
         gain = 1.0f;
     }
@@ -40,7 +41,7 @@ public:
             const float gNeeded = (peak > ceil) ? (ceil / peak) : 1.0f;
 
             if (gNeeded < gain)
-                gain = gNeeded;                          // 瞬間アタック
+                gain += atkCoef * (gNeeded - gain);      // 0.5ms 極小アタック平滑化
             else
                 gain += relCoef * (gNeeded - gain);      // 緩やかリリース
 
@@ -51,6 +52,7 @@ public:
 
 private:
     double sr = 44100.0;
+    float atkCoef = 0.05f;
     float relCoef = 0.0f;
     float gain = 1.0f;
 };

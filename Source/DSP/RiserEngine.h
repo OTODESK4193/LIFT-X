@@ -185,9 +185,9 @@ public:
         //  → 生成を44.1kHz固定クロックで行い、線形補間でホストSRへ引き伸ばす。
         //    sr==44100 のときは step==1 で従来と完全に同一挙動。
         noiseStep = (float)(kNoiseBaseRate / sr);
-        //  線形補間による分散低下 (オーバーサンプル時 2/3 に漸近) を補正
+        //  Hermite補間による分散低下 (オーバーサンプル時 約0.785 に漸近) を補正
         const float varFactor = juce::jlimit(0.05f, 1.0f,
-            juce::jmin(1.0f, noiseStep) + (1.0f - juce::jmin(1.0f, noiseStep)) * (2.0f / 3.0f));
+            juce::jmin(1.0f, noiseStep) + (1.0f - juce::jmin(1.0f, noiseStep)) * 0.785f);
         noiseInterpGain = 1.0f / std::sqrt(varFactor);
 
         // ドリフトLFO: 0.31Hz と 0.31*1.618Hz (黄金比でループ感を消す)
@@ -245,7 +245,7 @@ public:
         pinkB.fill(0.0f);
         brownState = 0.0f;
         noisePhase = 0.0f;
-        noiseCur = noiseNext = 0.0f;
+        noisePrev = noiseCur = noiseNext = noiseNext2 = 0.0f;
         uiProgress.store(0.0f, std::memory_order_relaxed);
         for (auto& u : uiPitch) u.store(60.0f, std::memory_order_relaxed);
     }
@@ -792,9 +792,10 @@ private:
     }
 
     // ---- ノイズジェネレーター ----
-    //  内部は 44.1kHz 固定の仮想クロックで生成し、線形補間でホストSRへ伸ばす。
+    //  内部は 44.1kHz 固定の仮想クロックで生成し、Hermite補間でホストSRへ伸ばす。
     //  これにより Pink/Brown のスペクトル形状と White の可聴帯域パワーが
     //  44.1 / 48 / 88.2 / 96 / 176.4 / 192kHz で完全に一致する。
+    //  Hermite 4点補間により、高SR時のナイキスト付近のsinc^2ロールオフを防止。
     //  sr == 44100 のときは step == 1 となり、旧実装と同一の出力になる。
     inline float nextNoise(int type) noexcept
     {
@@ -802,10 +803,18 @@ private:
         while (noisePhase >= 1.0f)
         {
             noisePhase -= 1.0f;
-            noiseCur = noiseNext;
-            noiseNext = genNoise(type);
+            noisePrev  = noiseCur;
+            noiseCur   = noiseNext;
+            noiseNext  = noiseNext2;
+            noiseNext2 = genNoise(type);
         }
-        return (noiseCur + (noiseNext - noiseCur) * noisePhase) * noiseInterpGain;
+        // 4点 3次エルミート補間
+        const float c0 = noiseCur;
+        const float c1 = 0.5f * (noiseNext - noisePrev);
+        const float c2 = noisePrev - 2.5f * noiseCur + 2.0f * noiseNext - 0.5f * noiseNext2;
+        const float c3 = 0.5f * (noiseNext2 - noisePrev) + 1.5f * (noiseCur - noiseNext);
+        const float interp = ((c3 * noisePhase + c2) * noisePhase + c1) * noisePhase + c0;
+        return interp * noiseInterpGain;
     }
 
     // 44.1kHz 基準の 1サンプル生成
@@ -927,14 +936,14 @@ private:
     float noiseCutSm = 500.0f;
     float noiseResSm = 2.0f;
 
-    // ノイズ: 44.1kHz固定クロック生成 + 線形補間 (SR非依存化)
+    // ノイズ: 44.1kHz固定クロック生成 + Hermite4点補間 (SR非依存化)
     static constexpr double kNoiseBaseRate = 44100.0;
     juce::uint32 rngState = 0x9e3779b9;
     std::array<float, 7> pinkB {};
     float brownState = 0.0f;
     float noiseStep = 1.0f;
     float noisePhase = 0.0f;
-    float noiseCur = 0.0f, noiseNext = 0.0f;
+    float noisePrev = 0.0f, noiseCur = 0.0f, noiseNext = 0.0f, noiseNext2 = 0.0f;
     float noiseInterpGain = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE(RiserEngine)

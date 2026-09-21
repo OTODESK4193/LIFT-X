@@ -44,6 +44,16 @@ namespace lfx
         return x;
     }
 
+    // 4点 3次エルミート補間 (Hermite Interpolation)
+    inline float hermite4(float frac, float y0, float y1, float y2, float y3) noexcept
+    {
+        const float c0 = y1;
+        const float c1 = 0.5f * (y2 - y0);
+        const float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+        const float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+        return ((c3 * frac + c2) * frac + c1) * frac + c0;
+    }
+
     inline int findNearestPrime(int n)
     {
         auto isPrime = [](int num)
@@ -84,7 +94,7 @@ namespace lfx
         }
     };
 
-    // Shimmer用オクターブシフター (SR依存ウィンドウ)
+    // Shimmer用オクターブシフター (SR依存ウィンドウ + Hermite4点補間)
     class OctaveShifter
     {
         static constexpr int kBufSize = 16384;
@@ -120,8 +130,11 @@ namespace lfx
                 if (readPos < 0.0f) readPos += (float)kBufSize;
                 const int idx1 = (int)readPos;
                 const float frac = readPos - (float)idx1;
+                const int idx0 = (idx1 - 1 + kBufSize) % kBufSize;
                 const int idx2 = (idx1 + 1) % kBufSize;
-                return buffer[(size_t)idx1] * (1.0f - frac) + buffer[(size_t)idx2] * frac;
+                const int idx3 = (idx1 + 2) % kBufSize;
+                return hermite4(frac, buffer[(size_t)idx0], buffer[(size_t)idx1],
+                                      buffer[(size_t)idx2], buffer[(size_t)idx3]);
             };
 
             const float outA = getInterpolated(delayA);
@@ -460,15 +473,6 @@ namespace lfx
             const float mix = curAmount * 0.5f;
             float outL = 0.0f, outR = 0.0f;
 
-            auto hermite = [](float frac, float y0, float y1, float y2, float y3) noexcept
-            {
-                const float c0 = y1;
-                const float c1 = 0.5f * (y2 - y0);
-                const float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
-                const float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
-                return ((c3 * frac + c2) * frac + c1) * frac + c0;
-            };
-
             float mods[4];
             mods[0] = std::sin(lfoPhase1 * juce::MathConstants<float>::twoPi);
             mods[1] = -mods[0];
@@ -492,10 +496,10 @@ namespace lfx
                 int idx2 = idx1 + 1; if (idx2 >= halfSize) idx2 -= halfSize;
                 int idx3 = idx1 + 2; if (idx3 >= halfSize) idx3 -= halfSize;
 
-                const float chL = hermite(frac, delayBuffer[(size_t)idx0 * 2], delayBuffer[(size_t)idx1 * 2],
-                                          delayBuffer[(size_t)idx2 * 2], delayBuffer[(size_t)idx3 * 2]);
-                const float chR = hermite(frac, delayBuffer[(size_t)idx0 * 2 + 1], delayBuffer[(size_t)idx1 * 2 + 1],
-                                          delayBuffer[(size_t)idx2 * 2 + 1], delayBuffer[(size_t)idx3 * 2 + 1]);
+                const float chL = hermite4(frac, delayBuffer[(size_t)idx0 * 2], delayBuffer[(size_t)idx1 * 2],
+                                           delayBuffer[(size_t)idx2 * 2], delayBuffer[(size_t)idx3 * 2]);
+                const float chR = hermite4(frac, delayBuffer[(size_t)idx0 * 2 + 1], delayBuffer[(size_t)idx1 * 2 + 1],
+                                           delayBuffer[(size_t)idx2 * 2 + 1], delayBuffer[(size_t)idx3 * 2 + 1]);
 
                 if (i == 0 || i == 2)
                 {
@@ -604,11 +608,16 @@ namespace lfx
             if (idx1 < 0) idx1 += halfSize;
             const float frac = readPos - (float)idx1;
 
-            int idx2 = idx1 + 1;
-            if (idx2 >= halfSize) idx2 -= halfSize;
+            int idx0 = idx1 - 1; if (idx0 < 0) idx0 += halfSize;
+            int idx2 = idx1 + 1; if (idx2 >= halfSize) idx2 -= halfSize;
+            int idx3 = idx1 + 2; if (idx3 >= halfSize) idx3 -= halfSize;
 
-            float dL = delayBuffer[(size_t)idx1 * 2] * (1.0f - frac) + delayBuffer[(size_t)idx2 * 2] * frac;
-            float dR = delayBuffer[(size_t)idx1 * 2 + 1] * (1.0f - frac) + delayBuffer[(size_t)idx2 * 2 + 1] * frac;
+            float dL = hermite4(frac,
+                delayBuffer[(size_t)idx0 * 2], delayBuffer[(size_t)idx1 * 2],
+                delayBuffer[(size_t)idx2 * 2], delayBuffer[(size_t)idx3 * 2]);
+            float dR = hermite4(frac,
+                delayBuffer[(size_t)idx0 * 2 + 1], delayBuffer[(size_t)idx1 * 2 + 1],
+                delayBuffer[(size_t)idx2 * 2 + 1], delayBuffer[(size_t)idx3 * 2 + 1]);
 
             // DAMP: フィードバックループ内の高域減衰
             const float lpCoef = 1.0f - damp * 0.85f;
