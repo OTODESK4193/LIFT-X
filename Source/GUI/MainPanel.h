@@ -89,6 +89,7 @@ private:
                     const juce::StringArray& items);
     void layoutKnobGrid(juce::Rectangle<int> area, KnobCell** cells, int count, int cols);
     void refreshWaveDisplay(int osc);
+    float getEffectivePos(int osc) const;
     void refreshKeyButtons();
     void armLearn(const juce::String& paramId, juce::TextButton& btn);
 

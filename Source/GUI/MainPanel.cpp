@@ -159,15 +159,13 @@ MainPanel::MainPanel(LiftXAudioProcessor& p)
         keyEndBtn[(size_t)i].onClick = [this, i]
         { armLearn("osc" + juce::String(i + 1) + "KeyEnd", keyEndBtn[(size_t)i]); };
 
-        // 波形表示ソース
+        // 波形表示ソース (リアルタイム実効Position対応)
         waveDisp[(size_t)i].setSource([this, i](float* out, int nPts)
         {
             const int mode = (int)proc.apvts.getRawParameterValue(
                 "osc" + juce::String(i + 1) + "Wave")->load();
-            const float pos = proc.apvts.getRawParameterValue(
-                "osc" + juce::String(i + 1) + "Pos")->load();
             const bool useCustom = (mode == RiserEngine::CustomWT);
-            const float morph = useCustom ? pos : (float)mode * 0.25f;
+            const float morph = useCustom ? getEffectivePos(i) : (float)mode * 0.25f;
             proc.getWavetable(i).getDisplayWave(morph, out, nPts, useCustom);
         });
     }
@@ -275,16 +273,16 @@ void MainPanel::timerCallback()
     }
     lastNoteEvents = events;
 
-    // ---- 波形表示の更新検知 ----
+    // ---- 波形表示の更新検知 (リアルタイム実効Position追従) ----
     for (int i = 0; i < 3; ++i)
     {
         const juce::String n(i + 1);
         const int mode = (int)proc.apvts.getRawParameterValue("osc" + n + "Wave")->load();
-        const float pos = proc.apvts.getRawParameterValue("osc" + n + "Pos")->load();
+        const float effPos = getEffectivePos(i);
         const auto path = proc.getCustomWavetablePath(i);
 
         if (mode != lastWaveMode[(size_t)i]
-            || std::abs(pos - lastPos[(size_t)i]) > 0.002f
+            || std::abs(effPos - lastPos[(size_t)i]) > 0.002f
             || path != lastWtPath[(size_t)i])
         {
             refreshWaveDisplay(i);
@@ -339,11 +337,20 @@ void MainPanel::updateModBands(float lift, float prog)
                     { return juce::jlimit(20.0f, nyq, b * std::exp2(bip * rangeOct)); });
 }
 
+float MainPanel::getEffectivePos(int osc) const
+{
+    const juce::String n(osc + 1);
+    const float basePos = proc.apvts.getRawParameterValue("osc" + n + "Pos")->load();
+    const float envPos = proc.getEnvPosition();
+    const float posBip = (proc.getCurves().read(CurveStore::posCurve(osc)).evaluate(envPos) - 0.5f) * 2.0f;
+    return juce::jlimit(0.0f, 1.0f, basePos + posBip * 1.0f);
+}
+
 void MainPanel::refreshWaveDisplay(int osc)
 {
     const juce::String n(osc + 1);
     lastWaveMode[(size_t)osc] = (int)proc.apvts.getRawParameterValue("osc" + n + "Wave")->load();
-    lastPos[(size_t)osc] = proc.apvts.getRawParameterValue("osc" + n + "Pos")->load();
+    lastPos[(size_t)osc] = getEffectivePos(osc);
     lastWtPath[(size_t)osc] = proc.getCustomWavetablePath(osc);
     waveDisp[(size_t)osc].refresh();
 }
