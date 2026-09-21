@@ -428,6 +428,13 @@ namespace lfx
             delayBuffer.assign((size_t)halfSize * 2, 0.0f);
             writeIndex = 0;
             lfoPhase1 = lfoPhase2 = 0.0f;
+
+            // パラメータースムージング (τ≒15ms)
+            smCoef = (float)(1.0 - std::exp(-1.0 / (0.015 * sr)));
+            curAmount = 0.0f;
+            curRate   = 0.8f;
+            curDepth  = 0.5f;
+            curWidth  = 1.0f;
         }
 
         void process(float& inOutL, float& inOutR, float amount,
@@ -435,16 +442,22 @@ namespace lfx
         {
             if (delayBuffer.empty()) return;
 
+            // パラメータースムージング
+            curAmount += smCoef * (amount - curAmount);
+            curRate   += smCoef * (rate   - curRate);
+            curDepth  += smCoef * (depth  - curDepth);
+            curWidth  += smCoef * (width  - curWidth);
+
             // amount<=0 でも LFO/バッファ更新は継続 (陳腐化バースト防止)
-            const float lfoRate1 = rate;
-            const float lfoRate2 = rate * 1.5f;
+            const float lfoRate1 = curRate;
+            const float lfoRate2 = curRate * 1.5f;
 
             lfoPhase1 += lfoRate1 / (float)sampleRate;
             if (lfoPhase1 >= 1.0f) lfoPhase1 -= 1.0f;
             lfoPhase2 += lfoRate2 / (float)sampleRate;
             if (lfoPhase2 >= 1.0f) lfoPhase2 -= 1.0f;
 
-            const float mix = amount * 0.5f;
+            const float mix = curAmount * 0.5f;
             float outL = 0.0f, outR = 0.0f;
 
             auto hermite = [](float frac, float y0, float y1, float y2, float y3) noexcept
@@ -464,7 +477,7 @@ namespace lfx
 
             for (int i = 0; i < 4; ++i)
             {
-                const float delayMs = 12.0f + (mods[i] * 5.0f * depth) + ((float)i * 3.0f);
+                const float delayMs = 12.0f + (mods[i] * 5.0f * curDepth) + ((float)i * 3.0f);
                 const float delaySamps = delayMs * (float)(sampleRate / 1000.0);
 
                 float readPos = (float)writeIndex - delaySamps;
@@ -505,10 +518,10 @@ namespace lfx
             float wetL = outL * 0.25f;
             float wetR = outR * 0.25f;
             const float mono = (wetL + wetR) * 0.5f;
-            wetL = mono + (wetL - mono) * width;
-            wetR = mono + (wetR - mono) * width;
+            wetL = mono + (wetL - mono) * curWidth;
+            wetR = mono + (wetR - mono) * curWidth;
 
-            if (amount > 0.0f)
+            if (curAmount > 0.0f)
             {
                 inOutL = inOutL * (1.0f - mix) + wetL * mix;
                 inOutR = inOutR * (1.0f - mix) + wetR * mix;
@@ -521,6 +534,8 @@ namespace lfx
         int halfSize = 0;
         int writeIndex = 0;
         float lfoPhase1 = 0.0f, lfoPhase2 = 0.0f;
+        float curAmount = 0.0f, curRate = 0.8f, curDepth = 0.5f, curWidth = 1.0f;
+        float smCoef = 0.002f;
     };
 
     // ------------------------------------------
@@ -548,6 +563,11 @@ namespace lfx
             //  release 0.0002 @44.1k → τ ≒ 113ms
             duckAtkCoef = (float)(1.0 - std::exp(-1.0 / (0.0227 * sr)));
             duckRelCoef = (float)(1.0 - std::exp(-1.0 / (0.1134 * sr)));
+
+            // スムージング係数の事前計算 (SR非依存化・毎サンプルexp呼び出し排除)
+            amountSmoothCoef = (float)(1.0 - std::exp(-1.0 / (0.015 * sr)));
+            fbSmoothCoef     = (float)(1.0 - std::exp(-1.0 / (0.015 * sr)));
+            delaySmoothCoef  = (float)(1.0 - std::exp(-1.0 / (0.300 * sr))); // τ=300ms (テープ風グライド)
         }
 
         void process(float& inOutL, float& inOutR, float amount, double bpm,
@@ -555,8 +575,6 @@ namespace lfx
         {
             if (delayBuffer.empty()) return;
 
-            const float amountSmoothCoef = 1.0f - std::exp(-1.0f / (0.015f * (float)sampleRate));
-            const float fbSmoothCoef = 1.0f - std::exp(-1.0f / (0.015f * (float)sampleRate));
             curAmount   += amountSmoothCoef * (amount - curAmount);
             curFeedback += fbSmoothCoef * (juce::jlimit(0.0f, 0.95f, feedback) - curFeedback);
 
@@ -576,7 +594,6 @@ namespace lfx
             targetDelaySamps = juce::jlimit(32.0f, (float)(halfSize - 2), targetDelaySamps);
 
             if (currentDelaySamps == 0.0f) currentDelaySamps = targetDelaySamps;
-            const float delaySmoothCoef = 1.0f - std::exp(-1.0f / (0.02f * (float)sampleRate));
             currentDelaySamps += delaySmoothCoef * (targetDelaySamps - currentDelaySamps);
 
             float readPos = (float)writeIndex - currentDelaySamps;
@@ -628,6 +645,7 @@ namespace lfx
         float curFeedback = 0.0f;
         float dcX1L = 0.0f, dcY1L = 0.0f, dcX1R = 0.0f, dcY1R = 0.0f;
         float duckAtkCoef = 0.001f, duckRelCoef = 0.0002f;  // prepareToPlayでSRから算出
+        float amountSmoothCoef = 0.002f, fbSmoothCoef = 0.002f, delaySmoothCoef = 0.001f;
     };
 
     // ------------------------------------------
@@ -1046,6 +1064,9 @@ public:
             { true, true, true, true }, { true, true, true, true },
             { true, true, true, true }, { true, true, true, true },
             { true, true, true, true }, { true, true, true, true } }};
+
+        // NoteOn発生時にカーブ平滑をターゲット値へ即時スナップさせるフラグ
+        bool forceSmSnap = false;
     };
 
     void prepare(double sr)
@@ -1122,8 +1143,8 @@ public:
             return s * (t + (1.0f - t * 0.25f) * std::tanh((a - t) * 2.0f));
         };
 
-        // 平滑の初期化 (最初のブロックはターゲットへスナップ)
-        if (!modSmInit)
+        // 平滑の初期化 (最初のブロック、またはNoteOn発生時はターゲットへ即時スナップ)
+        if (!modSmInit || p.forceSmSnap)
         {
             modSmInit = true;
             satAmtSm = p.satAmt;   satDriveSm = p.satDrive;

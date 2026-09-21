@@ -730,6 +730,7 @@ void LiftXAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     // ---- FXチェーン (カーブ変調をブロックレートで合成) ----
     FxChain::Params fp;
     gatherFxParams(fp, bpm, ppq, playing);
+    fp.forceSmSnap = noteOnThisBlock;
     mFx.process(busL, busR, numSamples, fp);
 
     // ---- バス合算 → 出力バッファ ----
