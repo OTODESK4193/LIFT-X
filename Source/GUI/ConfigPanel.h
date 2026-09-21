@@ -173,7 +173,7 @@ public:
         // ---- バージョン情報 ----
         verInfo.setFont(juce::Font(juce::FontOptions(11.5f)));
         verInfo.setColour(juce::Label::textColourId, LiftColors::textDim);
-        verInfo.setText("LIFT-X v" LIFTX_VERSION "  -  OTODESK  /  JUCE 8  /  SR 44.1-192kHz",
+        verInfo.setText("LIFT-X " LIFTX_VERSION "  -  OTODESK  /  JUCE 8  /  SR 44.1-192kHz",
                         juce::dontSendNotification);
         addAndMakeVisible(verInfo);
     }

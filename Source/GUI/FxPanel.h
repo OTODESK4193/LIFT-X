@@ -19,6 +19,7 @@
 #include "GlowToggle.h"
 #include "ModBand.h"
 #include "ColorPalette.h"
+#include "PredicateComboBox.h"
 
 class FxPanel : public juce::Component,
                 private juce::Timer
@@ -67,7 +68,7 @@ private:
 
     // ---- 5スロット (適用順序) ----
     juce::Label chainLabel;
-    std::array<juce::ComboBox, FxChain::kNumSlots> slotType;
+    std::array<PredicateComboBox, FxChain::kNumSlots> slotType;
 
     // ---- FXサブタブ + カーブサブタブ ----
     std::array<std::unique_ptr<juce::TextButton>, 6> fxTabs;

@@ -812,37 +812,43 @@ namespace lfx
     struct SaturationState
     {
         float tapeHysteresis = 0.0f;
-        float lastX = 0.0f;
-        float lastF = 0.0f;
+        double lastX = 0.0;
+        double lastF = 0.0;
+        int   lastType = -1;
         bool  active = false;
 
-        void reset() noexcept { tapeHysteresis = 0.0f; lastX = 0.0f; lastF = 0.0f; active = false; }
+        void reset() noexcept
+        {
+            tapeHysteresis = 0.0f;
+            lastX = 0.0;
+            lastF = 0.0;
+            lastType = -1;
+            active = false;
+        }
     };
 
-    inline float calcADAAFunc(float x, int type) noexcept
+    inline double calcADAAFunc(double x, int type) noexcept
     {
         switch (type)
         {
         case 0: // Soft Tanh
-            if (std::abs(x) > 10.0f) return std::abs(x) - 0.693147f;
+            if (std::abs(x) > 10.0) return std::abs(x) - 0.6931471805599453;
             return std::log(std::cosh(x));
         case 1: // Hard Clip
-            if (x < -1.0f) return -x - 0.5f;
-            if (x > 1.0f)  return  x - 0.5f;
-            return 0.5f * x * x;
+            if (x < -1.0) return -x - 0.5;
+            if (x >  1.0) return  x - 0.5;
+            return 0.5 * x * x;
         case 6: // BJT (Atan based)
         {
-            const float k = 2.2f;
-            const float scale = 0.58f;
-            const float term1 = x * std::atan(k * x);
-            const float term2 = (0.5f / k) * std::log(1.0f + k * k * x * x);
+            const double k = 2.2;
+            const double scale = 0.58;
+            const double term1 = x * std::atan(k * x);
+            const double term2 = (0.5 / k) * std::log(1.0 + k * k * x * x);
             return scale * (term1 - term2);
         }
         case 7: // Wavefold
-            return -1.0f / juce::MathConstants<float>::pi * std::cos(x * juce::MathConstants<float>::pi);
-        case 10: // Cubic
-            return (0.5f * x * x) - (x * x * x * x * 0.08333333f);
-        default: return 0.0f;
+            return -1.0 / juce::MathConstants<double>::pi * std::cos(x * juce::MathConstants<double>::pi);
+        default: return 0.0;
         }
     }
 
@@ -851,7 +857,7 @@ namespace lfx
         if (drive <= 1.001f)
         {
             state.active = false;
-            state.lastX = x;
+            state.lastX = (double)x;
             return x;
         }
 
@@ -895,29 +901,31 @@ namespace lfx
             case 1: return juce::jlimit(-1.0f, 1.0f, v);
             case 6: return std::atan(v * 2.2f) * 0.58f;
             case 7: return std::sin(v * juce::MathConstants<float>::pi);
-            case 10: return v - (v * v * v) / 3.1f;
             default: return v;
             }
         };
 
-        if (!state.active)
+        const double gd = (double)g;
+
+        if (!state.active || state.lastType != type)
         {
             state.active = true;
-            state.lastX = g;
-            state.lastF = calcADAAFunc(g, type);
+            state.lastType = type;
+            state.lastX = gd;
+            state.lastF = calcADAAFunc(gd, type);
             return direct(g);
         }
 
-        const float Fx = calcADAAFunc(g, type);
-        const float delta = g - state.lastX;
+        const double Fx = calcADAAFunc(gd, type);
+        const double delta = gd - state.lastX;
 
         float output;
-        if (std::abs(delta) < 1.0e-5f)
+        if (std::abs(delta) < 1.0e-10)
             output = direct(g);
         else
-            output = (Fx - state.lastF) / delta;
+            output = (float)((Fx - state.lastF) / delta);
 
-        state.lastX = g;
+        state.lastX = gd;
         state.lastF = Fx;
         return output;
     }
@@ -1047,8 +1055,8 @@ public:
         delay.prepareToPlay(sr);
         reverb.prepareToPlay(sr);
         ducker.prepareToPlay(sr);
-        stutter.prepareToPlay(sr);
-        dcCoef = std::exp((float)(-1.0 / (0.004523 * sr)));
+        // Saturation 出力の DC ブロッカー係数 (全SRで約35Hzカットオフを維持)
+        dcCoef = (float)std::exp(-2.0 * juce::MathConstants<double>::pi * 35.0 / sr);
         for (int ch = 0; ch < 2; ++ch) { satState[ch].reset(); dcState[ch] = 0.0f; }
 
         // カーブ変調されるパラメーターのサンプル単位平滑 (τ≒10ms)

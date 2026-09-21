@@ -34,6 +34,29 @@ FxPanel::FxPanel(LiftXAudioProcessor& p)
     for (int s = 0; s < FxChain::kNumSlots; ++s)
     {
         slotType[(size_t)s].addItemList(FxChain::getTypeNames(), 1);
+
+        // 他のスロットですでに使用されているFXタイプは非活性化 (Granular準拠・重複禁止)
+        slotType[(size_t)s].setItemEnabledPredicate([this, s](int itemId) -> bool
+        {
+            const int fxType = itemId - 1; // 1-based (addItemList starts at 1) to 0-based FxType
+            if (fxType <= 0) return true;  // None (0) は常にどのスロットでも選択可能
+
+            // 自分のスロットで現在選択中のタイプなら選択可能
+            auto* myParam = proc.apvts.getRawParameterValue("fx" + juce::String(s + 1) + "Type");
+            const int myType = (myParam != nullptr) ? (int)myParam->load() : 0;
+            if (fxType == myType) return true;
+
+            // 他のスロットで既に選択されているFXタイプは非活性化 (重複禁止)
+            for (int other = 0; other < FxChain::kNumSlots; ++other)
+            {
+                if (other == s) continue;
+                auto* p = proc.apvts.getRawParameterValue("fx" + juce::String(other + 1) + "Type");
+                if (p != nullptr && (int)p->load() == fxType)
+                    return false; // 他のスロットで使用中のため非活性化
+            }
+            return true;
+        });
+
         addAndMakeVisible(slotType[(size_t)s]);
         comboAtts.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
             proc.apvts, "fx" + juce::String(s + 1) + "Type", slotType[(size_t)s]));
