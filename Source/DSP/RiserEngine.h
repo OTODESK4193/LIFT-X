@@ -381,8 +381,8 @@ public:
         // (リリース中に連打された場合でも取りこぼさないため)
         if (!noteHeld && ampEnv <= 1.0e-4f && !pendingNote)
         {
-            if (progress > 0.0) { progress = 0.0; uiProgress.store(0.0f, std::memory_order_relaxed); }
             ampEnv = 0.0f;
+            uiProgress.store((float)progress, std::memory_order_relaxed);
             // 発音していなくてもGUIのPITCH RAILを追従させるため、
             // ブロックあたり1回だけコントロールティックを回してターゲットを更新する。
             // (音は出さないので出力バッファには一切書き込まない)
