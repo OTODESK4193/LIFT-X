@@ -8,6 +8,16 @@
 ##
 <img src="Source/Assets/Main.jpg" width="700">
 
+## Demo Videos
+
+<p align="center">
+  <b>Introduction YouTube Link</b><br>
+  <a href="https://youtu.be/6C2y2-V8CnU">
+    <img src="Source/Assets/LIFT-X.jpg"
+         alt="Ambience - Introduction YouTube Link" width="640" height="360">
+  </a>
+</p>
+
 ## Overview
 
 **LIFT-X** is a riser-dedicated MIDI synthesiser VST3 built around one idea: **a riser is not an envelope — it is forty-one envelopes moving together.**
